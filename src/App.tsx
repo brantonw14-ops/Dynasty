@@ -17,7 +17,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
-import { computePositionOverall, computeTeamOverall, rosterNeeds } from './engine/players'
+import { computePositionOverall, computeTeamOverall, POSITION_ATTRIBUTES, rosterNeeds } from './engine/players'
 import { computeConferenceSeeds, computeStandings } from './engine/standings'
 import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
 
@@ -45,6 +45,13 @@ const ROUND_ORDER: PlayoffRound[] = ['wildcard', 'divisional', 'conference', 'su
 
 function formatMoney(n: number) {
   return `$${(n / 1_000_000).toFixed(1)}M`
+}
+
+/** Short column-header abbreviation for a position attribute label, e.g. "Route Running" -> "RR", "Speed" -> "SPD". */
+function abbrevLabel(label: string) {
+  const words = label.split(' ')
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase()
+  return words.map((w) => w[0]).join('').toUpperCase()
 }
 
 interface SeasonStatTotals {
@@ -236,8 +243,8 @@ function RosterView({
       {POSITION_ORDER.map((pos) => {
         const players = byPosition.get(pos)
         if (!players || players.length === 0) return null
-        const isQB = pos === 'QB'
         const positionOverall = Math.round(computePositionOverall(players))
+        const attrLabels = POSITION_ATTRIBUTES[pos]
         return (
           <div key={pos} className="mb-6">
             <h2 className="text-sm font-semibold text-gray-500 mb-2">
@@ -251,13 +258,9 @@ function RosterView({
                   <th className="py-1 text-right">Age</th>
                   <th className="py-1 text-right">OVR</th>
                   <th className="py-1 text-right">POT</th>
-                  {isQB && (
-                    <>
-                      <th className="py-1 text-right">ACC</th>
-                      <th className="py-1 text-right">DEC</th>
-                      <th className="py-1 text-right">PLM</th>
-                    </>
-                  )}
+                  <th className="py-1 text-right" title={attrLabels[0]}>{abbrevLabel(attrLabels[0])}</th>
+                  <th className="py-1 text-right" title={attrLabels[1]}>{abbrevLabel(attrLabels[1])}</th>
+                  <th className="py-1 text-right" title={attrLabels[2]}>{abbrevLabel(attrLabels[2])}</th>
                   <th className="py-1 text-right">Salary</th>
                   <th className="py-1 text-right">Yrs</th>
                   <th className="py-1 text-right">Season</th>
@@ -300,13 +303,9 @@ function RosterView({
                     <td className="py-1 text-right">{p.age}</td>
                     <td className="py-1 text-right">{p.ratings.overall}</td>
                     <td className="py-1 text-right">{p.ratings.potential}</td>
-                    {isQB && (
-                      <>
-                        <td className="py-1 text-right">{p.ratings.accuracy}</td>
-                        <td className="py-1 text-right">{p.ratings.decisionMaking}</td>
-                        <td className="py-1 text-right">{p.ratings.playmaking}</td>
-                      </>
-                    )}
+                    <td className="py-1 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
+                    <td className="py-1 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
+                    <td className="py-1 text-right" title={attrLabels[2]}>{p.ratings.attr3}</td>
                     <td className="py-1 text-right">
                       {p.contract ? formatMoney(p.contract.salary) : '-'}
                     </td>

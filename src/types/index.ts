@@ -11,18 +11,19 @@ export type Position =
   | 'K'
   | 'P'
 
+/**
+ * Overall is derived solely from a player's three position-specific core
+ * attributes (attr1/attr2/attr3) - what those three actually mean depends
+ * on position, see POSITION_ATTRIBUTES in engine/players.ts (e.g. for a WR
+ * they're Speed/Catching/Route Running; for a K, Kick Accuracy/Kick Power/
+ * Clutch Gene).
+ */
 export interface Ratings {
   overall: number
-  speed: number
-  strength: number
-  agility: number
-  awareness: number
   potential: number
-  // QB-specific but generated for every position for a consistent shape;
-  // only meaningfully used/displayed for QBs.
-  accuracy: number
-  decisionMaking: number
-  playmaking: number
+  attr1: number
+  attr2: number
+  attr3: number
 }
 
 export interface Contract {

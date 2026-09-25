@@ -1,4 +1,4 @@
-import type { Player, Team } from '../types'
+import type { Player, Position, Team } from '../types'
 import { nextDepthOrder, rosterNeeds } from './players'
 import { randInt, type Rng } from './rng'
 import { marketSalary } from './salary'
@@ -27,8 +27,8 @@ export function expireContracts(players: Player[]): Player[] {
   })
 }
 
-function estimateSalary(rng: Rng, overall: number, age: number) {
-  return Math.round(marketSalary(overall, age) * (0.9 + rng() * 0.25))
+function estimateSalary(rng: Rng, position: Position, overall: number, age: number) {
+  return Math.round(marketSalary(position, overall, age) * (0.9 + rng() * 0.25))
 }
 
 export interface FreeAgentSigning {
@@ -74,13 +74,13 @@ export function runFreeAgency(
       const salaryCap = capRemaining.get(teamId) ?? 0
       const candidateIndex = pool.findIndex((p) => {
         if (!needs.includes(p.position)) return false
-        const salary = estimateSalary(rng, p.ratings.overall, p.age)
+        const salary = estimateSalary(rng, p.position, p.ratings.overall, p.age)
         return salary <= salaryCap
       })
       if (candidateIndex === -1) continue
 
       const [player] = pool.splice(candidateIndex, 1)
-      const salary = estimateSalary(rng, player.ratings.overall, player.age)
+      const salary = estimateSalary(rng, player.position, player.ratings.overall, player.age)
       needs.splice(needs.indexOf(player.position), 1)
       capRemaining.set(teamId, salaryCap - salary)
 

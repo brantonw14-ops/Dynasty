@@ -510,7 +510,7 @@ async function main() {
   const userCapSpace = computeCapSpace(userRosterBeforeSigning)
   const userNeeds = rosterNeeds(userRosterBeforeSigning)
   const affordableFAs = stillFreeAgents
-    .filter((p) => userNeeds.includes(p.position) && marketSalary(p.ratings.overall, p.age) * 1.15 <= userCapSpace)
+    .filter((p) => userNeeds.includes(p.position) && marketSalary(p.position, p.ratings.overall, p.age) * 1.15 <= userCapSpace)
     .sort((a, b) => b.ratings.overall - a.ratings.overall)
   if (affordableFAs.length === 0) throw new Error('Expected at least one affordable free agent')
   const targetFA = affordableFAs[0]

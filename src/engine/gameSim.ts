@@ -204,24 +204,26 @@ function generateOffenseBox(
     stats.passYards += passYards
     stats.passTDs += passTDs
 
+    // QB attributes: attr1=Accuracy, attr2=Decision Making, attr3=Playmaking.
     // Attempts scale with yardage; completion rate is driven by accuracy.
     attempts = Math.max(8, Math.round(passYards / 7.5 + randNormal(rng, 0, 3)))
-    const completionRate = clamp01(0.63 + (qb.ratings.accuracy - 60) * 0.006)
+    const completionRate = clamp01(0.58 + (qb.ratings.attr1 - 68) * 0.006)
     completions = Math.min(attempts, Math.max(0, Math.round(attempts * completionRate)))
     stats.passAttempts += attempts
     stats.passCompletions += completions
 
     // Bad decision-making means more picks; good decision-making means
-    // fewer - roughly 0-3 interceptions per game at the extremes.
-    const interceptionRate = clamp01((70 - qb.ratings.decisionMaking) * 0.006)
+    // fewer, but even a great decision-maker throws the occasional pick -
+    // roughly a floor of 0.5% of attempts up toward ~10% for a truly poor one.
+    const interceptionRate = Math.max(0.005, clamp01((75 - qb.ratings.attr2) * 0.0032))
     for (let i = 0; i < attempts; i++) {
-      if (rng() < interceptionRate / attempts) interceptions++
+      if (rng() < interceptionRate) interceptions++
     }
     stats.interceptions += interceptions
 
     // Mobile, playmaking QBs pick up some scramble yardage of their own,
     // carved out of the team's rushing total rather than added on top.
-    const scrambleShare = clamp01((qb.ratings.playmaking - 55) / 130)
+    const scrambleShare = clamp01((qb.ratings.attr3 - 55) / 130)
     const qbRushYards = Math.max(0, Math.round(rushYards * scrambleShare * 0.35))
     if (qbRushYards > 0) {
       stats.rushYards += qbRushYards
@@ -394,25 +396,27 @@ function generateSpecialTeamsBox(
   }
   const byDepth = (a: Player, b: Player) => a.depthOrder - b.depthOrder
 
+  // K/P attributes: attr1=Kick Accuracy, attr2=Kick Power, attr3=Clutch Gene.
   const kicker = roster.filter((p) => p.position === 'K').sort(byDepth)[0]
   if (kicker) {
     const stats = statsFor(kicker)
     const tdPoints = offense.totalTDs * 7
     const remainingPoints = Math.max(0, teamScore - tdPoints)
     const fgMade = Math.round(remainingPoints / 3)
-    const missChance = clamp01((80 - kicker.ratings.overall) * 0.01)
+    const clutchDiscount = (kicker.ratings.attr3 - 60) * 0.003
+    const missChance = clamp01((80 - kicker.ratings.attr1) * 0.01 - clutchDiscount)
     const fgAttempted = fgMade + (rng() < missChance ? 1 : 0)
     stats.fieldGoalsMade += fgMade
     stats.fieldGoalsAttempted += fgAttempted
     if (fgMade > 0) {
-      const legStrength = clamp01((kicker.ratings.overall - 50) / 50)
+      const legStrength = clamp01((kicker.ratings.attr2 - 50) / 50)
       stats.longestFieldGoal = Math.max(
         stats.longestFieldGoal,
         Math.round(32 + legStrength * 20 + rng() * 15),
       )
     }
     if (offense.totalTDs > 0) {
-      const xpMissChance = clamp01((85 - kicker.ratings.overall) * 0.006)
+      const xpMissChance = clamp01((85 - kicker.ratings.attr1) * 0.006 - clutchDiscount)
       let xpMade = 0
       for (let i = 0; i < offense.totalTDs; i++) {
         if (rng() >= xpMissChance) xpMade++
@@ -429,7 +433,7 @@ function generateSpecialTeamsBox(
     // needs its punter less often.
     const offenseQuality = clamp01((teamScore - 10) / 30)
     const puntCount = Math.max(1, randInt(rng, 3, 6) - Math.round(offenseQuality * 2))
-    const legStrength = clamp01((punter.ratings.overall - 50) / 50)
+    const legStrength = clamp01((punter.ratings.attr2 - 50) / 50)
     let totalPuntYards = 0
     for (let i = 0; i < puntCount; i++) {
       totalPuntYards += Math.max(25, Math.round(38 + legStrength * 12 + randNormal(rng, 0, 6)))

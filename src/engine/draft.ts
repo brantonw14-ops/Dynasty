@@ -1,6 +1,7 @@
 import type { Player, Position, Team } from '../types'
 import { generatePlayer, rosterNeeds } from './players'
 import { randInt, type Rng } from './rng'
+import { marketSalary } from './salary'
 
 export interface DraftPick {
   teamId: number
@@ -52,13 +53,19 @@ export function runDraft(
       const depthOrder = depthCount.get(depthKey) ?? 0
       depthCount.set(depthKey, depthOrder + 1)
 
+      const age = randInt(rng, 21, 23)
+      // Rookie deals are well below open-market rate even for a high-overall
+      // prospect - draft slot, not proven production, sets rookie pay in
+      // real life. Still scales with talent, just heavily discounted.
+      const rookieSalary = Math.round(marketSalary(prospect.position, prospect.ratings.overall, age) * 0.35)
+
       picks.push({
         teamId,
         player: {
           ...prospect,
           teamId,
-          age: randInt(rng, 21, 23),
-          contract: { salary: randInt(rng, 700_000, 1_200_000), yearsLeft: 4 },
+          age,
+          contract: { salary: rookieSalary, yearsLeft: 4 },
           depthOrder,
         },
       })

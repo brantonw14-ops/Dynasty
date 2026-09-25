@@ -24,7 +24,7 @@ export function playerValue(p: Player): number {
   }
 
   if (p.contract) {
-    const market = marketSalary(p.ratings.overall, p.age)
+    const market = marketSalary(p.position, p.ratings.overall, p.age)
     value += (market - p.contract.salary) / 1000
   }
 

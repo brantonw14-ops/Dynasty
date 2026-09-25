@@ -8,9 +8,10 @@ function clamp(n: number, min = 40, max = 99) {
 /**
  * Moves a player's ratings one year: young players trend toward their
  * potential, players in their prime hold roughly steady, and players past
- * 29 decline (faster the older they get). Sub-ratings scale proportionally
- * with the overall change so a player's profile (speed vs strength etc.)
- * stays roughly consistent rather than drifting independently.
+ * 29 decline (faster the older they get). The three core attributes scale
+ * proportionally with the target overall change, then overall is
+ * recomputed from them - it stays solely a function of those three,
+ * consistent with how it's generated.
  */
 export function progressRatings(rng: Rng, ratings: Ratings, ageAfterBirthday: number): Ratings {
   let delta: number
@@ -25,20 +26,15 @@ export function progressRatings(rng: Rng, ratings: Ratings, ageAfterBirthday: nu
     delta = -Math.round(declineRate + rng() * 2)
   }
 
-  const newOverall = clamp(ratings.overall + delta)
-  const scale = ratings.overall > 0 ? newOverall / ratings.overall : 1
+  const targetOverall = clamp(ratings.overall + delta)
+  const scale = ratings.overall > 0 ? targetOverall / ratings.overall : 1
 
-  return {
-    overall: newOverall,
-    speed: clamp(ratings.speed * scale),
-    strength: clamp(ratings.strength * scale),
-    agility: clamp(ratings.agility * scale),
-    awareness: clamp(ratings.awareness + (ageAfterBirthday > 29 ? 1 : 0)),
-    potential: ratings.potential,
-    accuracy: clamp(ratings.accuracy * scale),
-    decisionMaking: clamp(ratings.decisionMaking * scale),
-    playmaking: clamp(ratings.playmaking * scale),
-  }
+  const attr1 = clamp(ratings.attr1 * scale)
+  const attr2 = clamp(ratings.attr2 * scale)
+  const attr3 = clamp(ratings.attr3 * scale)
+  const overall = clamp((attr1 + attr2 + attr3) / 3)
+
+  return { overall, potential: ratings.potential, attr1, attr2, attr3 }
 }
 
 export function progressPlayer(rng: Rng, player: Player): Player {

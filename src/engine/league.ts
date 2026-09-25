@@ -478,7 +478,7 @@ export async function signFreeAgent(leagueId: number, playerId: number) {
 
   const capSpace = computeCapSpace(roster)
   const rng = createRng(league.season * 7919 + playerId)
-  const salary = Math.round(marketSalary(player.ratings.overall, player.age) * (0.9 + rng() * 0.25))
+  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age) * (0.9 + rng() * 0.25))
   if (salary > capSpace) throw new Error('Not enough cap space to sign this player')
 
   await db.players.update(playerId, {

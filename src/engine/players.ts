@@ -30,32 +30,64 @@ function clamp(n: number, min = 40, max = 99) {
   return Math.max(min, Math.min(max, Math.round(n)))
 }
 
+/**
+ * The three attributes that actually define each position, in attr1/attr2/
+ * attr3 order - a player's overall is derived solely from these, nothing
+ * else. Labels are for display only; the underlying fields are always
+ * named attr1/attr2/attr3 regardless of position.
+ */
+export const POSITION_ATTRIBUTES: Record<Position, [string, string, string]> = {
+  QB: ['Accuracy', 'Decision Making', 'Playmaking'],
+  RB: ['Speed', 'Break Tackle', 'Vision'],
+  WR: ['Speed', 'Catching', 'Route Running'],
+  TE: ['Speed', 'Catching', 'Route Running'],
+  OL: ['Pass Block', 'Run Block', 'Strength'],
+  DL: ['Pass Rush', 'Run Stop', 'Tackling'],
+  LB: ['Play Recognition', 'Tackling', 'Speed'],
+  CB: ['Speed', 'Man Coverage', 'Zone Coverage'],
+  S: ['Speed', 'Man Coverage', 'Zone Coverage'],
+  K: ['Kick Accuracy', 'Kick Power', 'Clutch Gene'],
+  P: ['Kick Accuracy', 'Kick Power', 'Clutch Gene'],
+}
+
 function generateRatings(rng: Rng, ratingOffset = 0): Ratings {
-  // Mean shifted up from the old 60 so a 55 floor doesn't pile up too much
-  // of the distribution right at the minimum.
-  const base = randNormal(rng, 68 + ratingOffset, 12)
-  const overall = clamp(base, MIN_OVERALL, 99)
+  // A player's three attributes aren't independent draws - a generational
+  // talent tends to be good at everything, a replacement-level guy weak
+  // across the board. Drawing a shared "talent" level first and then
+  // scattering each attribute around it (instead of three fully
+  // independent rolls) keeps that correlation and restores the wide
+  // overall spread real overalls have (a handful of 90+ studs, a long
+  // tail down toward the floor) - averaging three independent rolls on
+  // their own collapses toward the mean and produces almost no stars.
+  const talent = randNormal(rng, 68 + ratingOffset, 11)
+  let attr1 = clamp(randNormal(rng, talent, 8))
+  let attr2 = clamp(randNormal(rng, talent, 8))
+  let attr3 = clamp(randNormal(rng, talent, 8))
+  let overall = clamp((attr1 + attr2 + attr3) / 3)
+
+  // Overall is solely the average of the three attributes, but every player
+  // still needs to clear the roster floor - if the raw draw lands below it,
+  // lift all three by the same amount rather than special-casing overall.
+  if (overall < MIN_OVERALL) {
+    const boost = MIN_OVERALL - overall
+    attr1 = clamp(attr1 + boost)
+    attr2 = clamp(attr2 + boost)
+    attr3 = clamp(attr3 + boost)
+    overall = clamp((attr1 + attr2 + attr3) / 3, MIN_OVERALL, 99)
+  }
+
   // Potential is a ceiling, so it can never be below the player's own overall.
   const potential = clamp(overall + Math.abs(randNormal(rng, 8, 6)), overall, 99)
-  return {
-    overall,
-    speed: clamp(randNormal(rng, 60, 15)),
-    strength: clamp(randNormal(rng, 60, 15)),
-    agility: clamp(randNormal(rng, 60, 15)),
-    awareness: clamp(randNormal(rng, 55, 15)),
-    potential,
-    accuracy: clamp(randNormal(rng, 60 + ratingOffset, 14)),
-    decisionMaking: clamp(randNormal(rng, 60 + ratingOffset, 14)),
-    playmaking: clamp(randNormal(rng, 60 + ratingOffset, 14)),
-  }
+  return { overall, potential, attr1, attr2, attr3 }
 }
 
 /**
- * Salary scales with overall rating and age using the same market-rate
- * curve free agency/trades use, with some random variance layered on top.
+ * Salary scales with position, overall rating, and age using the same
+ * market-rate curve free agency/trades use, with some random variance
+ * layered on top.
  */
-function generateContractSalary(rng: Rng, overall: number, age: number, spendFactor = 1) {
-  const base = marketSalary(overall, age)
+function generateContractSalary(rng: Rng, position: Position, overall: number, age: number, spendFactor = 1) {
+  const base = marketSalary(position, overall, age)
   return Math.round(base * (0.85 + rng() * 0.3) * spendFactor)
 }
 
@@ -105,7 +137,7 @@ export function generatePlayer(
       teamId === null
         ? null
         : {
-            salary: generateContractSalary(rng, ratings.overall, age, strength?.spendFactor ?? 1),
+            salary: generateContractSalary(rng, position, ratings.overall, age, strength?.spendFactor ?? 1),
             yearsLeft: randInt(rng, 1, 4),
           },
     retired: false,
