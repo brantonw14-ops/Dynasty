@@ -183,6 +183,10 @@ export function generatePlayer(
     retired: false,
     injury: null,
     depthOrder: 0,
+    // These players weren't actually drafted through this league's own
+    // draft (it's day one) - estimate how many seasons they've played from
+    // age alone, assuming a typical entry age of 22.
+    experience: Math.max(0, age - 22),
   }
 }
 

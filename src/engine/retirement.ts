@@ -32,7 +32,7 @@ export function ageAndRetire(rng: Rng, players: Player[]): { retiredIds: number[
     if (rng() < retirementChance(p.position, nextAge)) {
       retiredIds.push(p.id)
     } else {
-      agedPlayers.push({ ...p, age: nextAge })
+      agedPlayers.push({ ...p, age: nextAge, experience: (p.experience ?? 0) + 1 })
     }
   }
 

@@ -203,6 +203,7 @@ function TeamPositionPanel({
                 <th className="py-1 pr-4">Name</th>
                 <th className="py-1 pr-4 text-right">Age</th>
                 <th className="py-1 pr-4 text-right">OVR</th>
+                <th className="py-1 pr-4 text-right">POT</th>
                 <th className="py-1 pr-4 text-right">Salary</th>
                 <th className="py-1"></th>
               </tr>
@@ -210,7 +211,7 @@ function TeamPositionPanel({
             <tbody>
               {(byPosition.get(expanded) ?? []).length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-1 text-gray-500">
+                  <td colSpan={6} className="py-1 text-gray-500">
                     No players at this position.
                   </td>
                 </tr>
@@ -225,6 +226,7 @@ function TeamPositionPanel({
                     </td>
                     <td className="py-1 pr-4 text-right">{p.age}</td>
                     <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                    <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                     <td className="py-1 pr-4 text-right whitespace-nowrap">
                       {p.contract ? formatMoney(p.contract.salary) : '-'}
                     </td>
@@ -385,6 +387,70 @@ function seasonStatLine(pos: Position, t?: SeasonStatTotals) {
   return '-'
 }
 
+/** Reuses seasonStatLine (built for a whole season's aggregated totals) for a single game's row, since the fields line up 1:1. */
+function gameStatLine(pos: Position, s: PlayerGameStats) {
+  return seasonStatLine(pos, {
+    ...s,
+    passerRatingAllowedSum: s.passerRatingAllowed,
+    passerRatingAllowedGames: s.passerRatingAllowed > 0 ? 1 : 0,
+  })
+}
+
+/** One team's full box score for a single game - every player with a recorded stat line, graded against position peers league-wide for that same week. */
+function BoxScoreTable({
+  title,
+  stats,
+  playerById,
+  grades,
+}: {
+  title: string
+  stats: PlayerGameStats[]
+  playerById: Map<number, Player>
+  grades: Map<number, SeasonGrade>
+}) {
+  const sorted = [...stats].sort((a, b) => POSITION_ORDER.indexOf(a.position) - POSITION_ORDER.indexOf(b.position))
+  return (
+    <div>
+      <h4 className="text-xs font-semibold text-gray-400 mb-1">{title}</h4>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="text-left text-gray-400 border-b">
+            <th className="py-1 pr-2">Name</th>
+            <th className="py-1 pr-2">Pos</th>
+            <th className="py-1 pr-2 text-right">Grade</th>
+            <th className="py-1 pl-2 text-left">Stat Line</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((s) => {
+            const player = playerById.get(s.playerId)
+            const grade = grades.get(s.playerId)
+            return (
+              <tr key={s.playerId} className="border-b">
+                <td className="py-1 pr-2 whitespace-nowrap">
+                  {player ? `${player.firstName} ${player.lastName}` : `Player ${s.playerId}`}
+                </td>
+                <td className="py-1 pr-2">{s.position}</td>
+                <td className={`py-1 pr-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-600'}`}>
+                  {grade ?? '-'}
+                </td>
+                <td className="py-1 pl-2 text-left text-gray-500 whitespace-nowrap">{gameStatLine(s.position, s)}</td>
+              </tr>
+            )
+          })}
+          {sorted.length === 0 && (
+            <tr>
+              <td colSpan={4} className="py-1 text-gray-500">
+                No recorded stats.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function RosterView({
   teamId,
   leagueId,
@@ -539,13 +605,14 @@ function RosterView({
                   <th className="py-1 pr-2 w-16">Status</th>
                   <th className="py-1 pr-6 min-w-[11rem]">Name</th>
                   <th className="py-1 px-2 text-right w-12">Age</th>
+                  <th className="py-1 px-2 text-right w-12" title="Seasons played in the league - Rookie means their first year">Exp</th>
                   <th className="py-1 px-2 text-right w-12">OVR</th>
                   <th className="py-1 px-2 text-right w-12">POT</th>
                   <th className="py-1 px-2 text-right w-12" title={attrLabels[0]}>{abbrevLabel(attrLabels[0])}</th>
                   <th className="py-1 px-2 text-right w-12" title={attrLabels[1]}>{abbrevLabel(attrLabels[1])}</th>
                   <th className="py-1 px-2 text-right w-12" title={attrLabels[2]}>{abbrevLabel(attrLabels[2])}</th>
                   <th className="py-1 pl-4 pr-2 text-right w-20">Salary</th>
-                  <th className="py-1 px-2 text-right w-12">Yrs</th>
+                  <th className="py-1 px-2 text-right w-12" title="Years left on current contract">Yrs Left</th>
                   <th className="py-1 pl-6 text-left">Season</th>
                   {editable && <th className="py-1 pl-4 w-16"></th>}
                 </tr>
@@ -603,6 +670,9 @@ function RosterView({
                         )}
                       </td>
                       <td className="py-1 px-2 text-right">{p.age}</td>
+                      <td className="py-1 px-2 text-right text-gray-400">
+                        {!p.experience ? 'R' : p.experience}
+                      </td>
                       <td className="py-1 px-2 text-right text-green-400 font-semibold">
                         {p.ratings.overall}
                         {p.trend === 'up' && <span className="ml-1 text-green-400" title="Playing well lately">▲</span>}
@@ -705,12 +775,33 @@ function GameReportView({
     [leagueId, season],
   )
 
-  if (!games || !roster || !seasonStats) return <p className="text-sm text-gray-500">Loading game report...</p>
+  // Names for the box score aren't limited to the user's own roster - the
+  // opponent's players need names too, and any of them (either side) could
+  // since have been traded/cut, so look them up by id directly rather than
+  // assuming they're still on the team they played for.
+  const boxScorePlayers = useLiveQuery(
+    (): Promise<Player[]> => {
+      if (!selectedGame || !seasonStats) return Promise.resolve([])
+      const ids = [...new Set(seasonStats.filter((s) => s.gameId === selectedGame.id).map((s) => s.playerId))]
+      return db.players.bulkGet(ids).then((ps) => ps.filter((p): p is Player => p != null))
+    },
+    [selectedGame?.id, seasonStats],
+  )
+
+  if (!games || !roster || !seasonStats || !boxScorePlayers) {
+    return <p className="text-sm text-gray-500">Loading game report...</p>
+  }
   if (sortedGames.length === 0 || !selectedGame) {
     return <p className="text-sm text-gray-500">No games played yet this season.</p>
   }
 
   const statsForGame = seasonStats.filter((s) => s.gameId === selectedGame.id)
+  const boxScorePlayerById = new Map(boxScorePlayers.map((p) => [p.id, p]))
+  // Grades every player against their position peers league-wide *for this
+  // one week* (not the whole season) - reuses gradeSeasonPerformance as-is,
+  // since it just aggregates and grades whatever rows it's handed; handing
+  // it a single week's rows makes it a single-game grade instead.
+  const weekGrades = gradeSeasonPerformance(seasonStats.filter((s) => s.week === selectedGame.week))
 
   const isHome = selectedGame.homeTeamId === userTeamId
   const myScore = isHome ? selectedGame.homeScore : selectedGame.awayScore
@@ -851,6 +942,28 @@ function GameReportView({
           </div>
         </div>
       )}
+
+      <div className="mb-6">
+        <h3 className="text-sm font-semibold text-gray-500 mb-2">Box Score</h3>
+        <p className="text-xs text-gray-600 mb-2">
+          Every player who recorded a stat this game, graded against their position peers league-wide for this same
+          week - not just the standout performances above.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <BoxScoreTable
+            title={teamName(userTeamId)}
+            stats={statsForGame.filter((s) => s.teamId === userTeamId)}
+            playerById={boxScorePlayerById}
+            grades={weekGrades}
+          />
+          <BoxScoreTable
+            title={teamName(oppTeamId)}
+            stats={statsForGame.filter((s) => s.teamId === oppTeamId)}
+            playerById={boxScorePlayerById}
+            grades={weekGrades}
+          />
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
@@ -1745,6 +1858,7 @@ function FreeAgencyView({
       if (key === 'name') return `${p.firstName} ${p.lastName}`
       if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
       if (key === 'age') return p.age
+      if (key === 'pot') return p.ratings.potential
       if (key === 'asking') return estimateFreeAgentAsk(season, p).salary
       return p.ratings.overall
     },
@@ -1810,6 +1924,7 @@ function FreeAgencyView({
             <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} />
             <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="text-right" />
             <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" />
+            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="text-right" />
             <SortHeader label="Asking" sortKey="asking" sort={sort} setSort={setSort} className="text-right" />
             <th className="py-1"></th>
           </tr>
@@ -1826,6 +1941,7 @@ function FreeAgencyView({
                 <td className="py-1">{p.position}</td>
                 <td className="py-1 text-right">{p.age}</td>
                 <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                <td className="py-1 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                 <td className={`py-1 text-right whitespace-nowrap ${tooExpensive ? 'text-red-400' : ''}`}>
                   {formatMoney(ask.salary)}/yr &middot; {ask.years}yr
                 </td>
@@ -1844,7 +1960,7 @@ function FreeAgencyView({
           })}
           {sorted.length === 0 && (
             <tr>
-              <td colSpan={6} className="text-sm text-gray-500 py-2">
+              <td colSpan={7} className="text-sm text-gray-500 py-2">
                 {positionFilter ? `No ${positionFilter} free agents available.` : 'No free agents available.'}
               </td>
             </tr>

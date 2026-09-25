@@ -125,6 +125,20 @@ async function assertSeasonSane(leagueId: number, season: number) {
       `game report: ${graded.length} graded performances, ${reasons.length} reason(s) for a ${myScore}-${oppScore} result`,
     )
     console.log('OK: game report classification and reasons generate without error')
+
+    // Box score: every player who recorded a stat this game should be
+    // gradeable against their position peers league-wide for that same
+    // week (not just the standouts classifyGamePerformance tags).
+    const oppTeamId = isHome ? reportGame.awayTeamId : reportGame.homeTeamId
+    const oppStats = stats.filter((s) => s.gameId === reportGame.id && s.teamId === oppTeamId)
+    const weekStats = stats.filter((s) => s.week === reportGame.week)
+    const weekGrades = gradeSeasonPerformance(weekStats)
+    const bothSidesStats = [...reportStats, ...oppStats]
+    const gradedCount = bothSidesStats.filter((s) => weekGrades.has(s.playerId)).length
+    if (bothSidesStats.length === 0) throw new Error('Expected box score rows for both teams in this game')
+    if (gradedCount === 0) throw new Error('Expected at least some box score rows to have a per-game grade')
+    console.log(`box score: ${bothSidesStats.length} total rows (both teams), ${gradedCount} with a per-game grade`)
+    console.log('OK: box score covers every player, not just standout performances, with per-game grades available')
   }
 
   const qbStats = stats.filter((s) => s.position === 'QB' && s.passAttempts > 0)
@@ -718,6 +732,9 @@ async function main() {
   const ratingsBefore = new Map(
     (await db.players.toArray()).map((p) => [p.id, p.ratings.overall]),
   )
+  const experienceBefore = new Map(
+    (await db.players.toArray()).map((p) => [p.id, p.experience ?? 0]),
+  )
 
   const rosterCountBefore = await db.players.count()
   const faResult = await advanceToFreeAgency(leagueId)
@@ -735,6 +752,22 @@ async function main() {
     'returning players changed overall rating',
   )
   if (changed.length === 0) throw new Error('No player ratings changed during progression')
+
+  // Every surviving player should be exactly one season more experienced
+  // after an offseason - this is what backs the roster screen's Exp column
+  // (and confirms a fresh league's veterans didn't all start at 0).
+  const survivorsWithHistory = survivors.filter((p) => experienceBefore.has(p.id))
+  const experienceMismatch = survivorsWithHistory.find(
+    (p) => (p.experience ?? 0) !== (experienceBefore.get(p.id) ?? 0) + 1,
+  )
+  if (experienceMismatch) {
+    throw new Error(
+      `Player ${experienceMismatch.id} experience went from ${experienceBefore.get(experienceMismatch.id)} to ${experienceMismatch.experience}, expected +1`,
+    )
+  }
+  const veteransAtStart = [...experienceBefore.values()].filter((e) => e > 0).length
+  if (veteransAtStart === 0) throw new Error('Expected a fresh league to start with some non-rookie veterans (experience > 0)')
+  console.log(`OK: experience increments by exactly 1 per offseason (${veteransAtStart} day-one veterans had experience > 0)`)
 
   // The first-ever offseason of a fresh (young) league shouldn't retire a
   // huge chunk of the roster - regression check for the age-generation bug
@@ -864,6 +897,7 @@ async function main() {
   console.log('OK: signed a free agent to the user team')
 
   const rosterCountBeforeDraft = await db.players.count()
+  const userIdsBeforeDraft = new Set((await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()).map((p) => p.id))
   await beginDraft(leagueId)
 
   // Drive the interactive draft to completion: whenever it's the user's
@@ -939,8 +973,21 @@ async function main() {
     throw new Error(`Expected simRestOfDraft to finish the draft and roll into the regular season, phase is ${leagueAfterSim?.phase}`)
   }
   const userRosterAfterSim = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
-  draftedCount = userRosterAfterSim.filter((p) => p.contract?.yearsLeft === 4).length
-  console.log(`OK: simRestOfDraft auto-drafted the remaining rounds (user roster now has ${draftedCount} rookie-contract players)`)
+  const draftedRookies = userRosterAfterSim.filter((p) => !userIdsBeforeDraft.has(p.id))
+  draftedCount = draftedRookies.length
+  console.log(`OK: simRestOfDraft auto-drafted the remaining rounds (user roster gained ${draftedCount} newly drafted players)`)
+
+  // Real NFL rookie deals are a fixed 4-year term with experience=0 at
+  // signing - confirms newly drafted players actually land on that (not
+  // just any player who happens to carry a 4-year deal, e.g. an extended
+  // veteran).
+  const badRookie = draftedRookies.find((p) => p.contract?.yearsLeft !== 4 || (p.experience ?? 0) !== 0)
+  if (badRookie) {
+    throw new Error(
+      `Drafted rookie ${badRookie.id} has yearsLeft=${badRookie.contract?.yearsLeft}, experience=${badRookie.experience}, expected yearsLeft=4, experience=0`,
+    )
+  }
+  console.log('OK: drafted rookies land on a 4-year rookie deal with 0 experience')
 
   const rosterCountAfter = await db.players.count()
   const leagueAfterOffseason = await db.leagues.get(leagueId)

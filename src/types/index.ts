@@ -60,6 +60,11 @@ export interface Player {
   // Flagged by the user as available in trade talks - AI teams periodically
   // shop offers for blocked players (see generateTradeOffers).
   onTradeBlock?: boolean
+  // Seasons played in the league - 0 for a player who was just drafted,
+  // incremented once per offseason (see ageAndRetire). Veterans generated
+  // for a fresh league start with an estimate based on age, since they
+  // weren't actually drafted through this league's own draft.
+  experience?: number
 }
 
 export type Conference = 'AFC' | 'NFC'

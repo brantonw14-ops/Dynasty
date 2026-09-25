@@ -206,9 +206,14 @@ export function prospectToPlayer(prospect: CollegeProspect, teamId: number, dept
     position: prospect.position,
     teamId,
     ratings: prospect.ratings,
+    // A real rookie contract is a fixed 4-year deal (the NFL's rookie wage
+    // scale) - no extension or renegotiation until it runs out, same as
+    // here: yearsLeft only ticks down via the normal offseason aging step,
+    // nothing shortens it early.
     contract: { salary: rookieSalary, yearsLeft: 4 },
     retired: false,
     injury: null,
     depthOrder,
+    experience: 0,
   }
 }
