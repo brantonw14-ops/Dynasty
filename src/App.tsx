@@ -307,8 +307,8 @@ function RosterView({
                       )}
                     </td>
                     <td className="py-1 px-2 text-right">{p.age}</td>
-                    <td className="py-1 px-2 text-right">{p.ratings.overall}</td>
-                    <td className="py-1 px-2 text-right">{p.ratings.potential}</td>
+                    <td className="py-1 px-2 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                    <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                     <td className="py-1 px-2 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
                     <td className="py-1 px-2 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
                     <td className="py-1 px-2 text-right" title={attrLabels[2]}>{p.ratings.attr3}</td>
@@ -405,7 +405,7 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
                 {p.firstName} {p.lastName}
               </td>
               <td className="py-1">{p.position}</td>
-              <td className="py-1 text-right">{p.ratings.overall}</td>
+              <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
             </tr>
           ))}
       </tbody>
@@ -721,7 +721,7 @@ function ResignView({
               </td>
               <td className="py-1">{p.position}</td>
               <td className="py-1 text-right">{p.age}</td>
-              <td className="py-1 text-right">{p.ratings.overall}</td>
+              <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
               <td className="py-1 text-right">{p.contract ? formatMoney(p.contract.salary) : '-'}</td>
               <td className="py-1 text-right">{p.contract?.yearsLeft ?? '-'}</td>
               <td className="py-1 text-right text-gray-500">
@@ -829,7 +829,7 @@ function FreeAgencyView({
               </td>
               <td className="py-1">{p.position}</td>
               <td className="py-1 text-right">{p.age}</td>
-              <td className="py-1 text-right">{p.ratings.overall}</td>
+              <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
               <td className="py-1 text-right">
                 <button
                   onClick={() => handleSign(p.id)}

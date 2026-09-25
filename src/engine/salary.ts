@@ -2,24 +2,29 @@ import type { Position } from '../types'
 import { MIN_OVERALL } from './players'
 
 /**
- * Roughly what the actual highest-paid player at each position earns per
- * year in today's NFL (top-of-market AAV): a 99-overall player in his prime
- * at that position should land right around this number, and it scales
- * down from there - not one flat number for every position. A 99-overall
- * QB commands real top-of-market QB money; a 99-overall kicker does not.
+ * What the actual highest-paid player at each position earns per year in
+ * today's NFL (top-of-market AAV, per 2026 contract data): a 99-overall
+ * player in his prime at that position should land right around this
+ * number, and it scales down from there - not one flat number for every
+ * position. A 99-overall QB commands real top-of-market QB money; a
+ * 99-overall kicker does not. Anchors (2026 AAV): Mahomes $63.4M (QB),
+ * Will Anderson >$50M (DL/EDGE), Ja'Marr Chase $38M (WR), Christian
+ * Gonzalez $33.75M (CB), Rashawn Slater $28.5M (OL), Kyle Hamilton $25.1M
+ * (S), Jahmyr Gibbs ~$22.5M (RB), Fred Warner $21M (LB), Kittle/Pitts $18M
+ * (TE), Harrison Butker $6.4M (K), Michael Dickson $3.7M (P).
  */
 const POSITION_MAX_AAV: Record<Position, number> = {
-  QB: 60_000_000,
-  DL: 40_000_000,
-  OL: 30_000_000,
-  WR: 35_000_000,
-  CB: 30_000_000,
-  LB: 28_000_000,
-  S: 22_000_000,
-  TE: 17_000_000,
-  RB: 16_000_000,
-  K: 6_000_000,
-  P: 5_000_000,
+  QB: 63_000_000,
+  DL: 52_000_000,
+  WR: 38_000_000,
+  CB: 34_000_000,
+  OL: 29_000_000,
+  S: 25_000_000,
+  RB: 23_000_000,
+  LB: 21_000_000,
+  TE: 18_000_000,
+  K: 6_500_000,
+  P: 3_700_000,
 }
 
 const SALARY_FLOOR = 900_000
