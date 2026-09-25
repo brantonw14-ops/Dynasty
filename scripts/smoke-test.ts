@@ -790,6 +790,36 @@ async function main() {
     throw new Error('Roster count did not grow from draft picks')
   }
 
+  // Mid-season roster moves: sim a few weeks in, cut a bench player off the
+  // user's own team, and confirm they land back in the free agent pool and
+  // can be replaced by signing someone else - without needing to wait for
+  // the resign window.
+  for (let i = 0; i < 3; i++) await simWeek(leagueId)
+  const leagueMidSeason = await db.leagues.get(leagueId)
+  if (leagueMidSeason?.phase !== 'regular') throw new Error('Expected league to still be mid-regular-season')
+  if (leagueAfterOffseason.userTeamId == null) throw new Error('League has no user team')
+  const midSeasonRoster = await db.players.where('teamId').equals(leagueAfterOffseason.userTeamId).toArray()
+  const midSeasonCutCandidate = [...midSeasonRoster].sort((a, b) => a.ratings.overall - b.ratings.overall)[0]
+  await cutPlayer(leagueId, midSeasonCutCandidate.id)
+  const cutPlayerAfter = await db.players.get(midSeasonCutCandidate.id)
+  if (cutPlayerAfter?.teamId !== null) throw new Error('Mid-season cut did not release the player to free agency')
+  console.log('OK: cut a player mid-season and they became a free agent')
+
+  const midSeasonFAs = (await db.players.toArray()).filter((p) => p.teamId === null)
+  const midSeasonNeeds = new Set(rosterNeeds(await db.players.where('teamId').equals(leagueAfterOffseason.userTeamId).toArray()))
+  const midSeasonCapSpace = computeCapSpace(await db.players.where('teamId').equals(leagueAfterOffseason.userTeamId).toArray())
+  const midSeasonTarget = midSeasonFAs
+    .filter((p) => midSeasonNeeds.has(p.position) && marketSalary(p.position, p.ratings.overall, p.age) * 1.15 <= midSeasonCapSpace)
+    .sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+  if (midSeasonTarget) {
+    await signFreeAgent(leagueId, midSeasonTarget.id)
+    const signedMidSeason = await db.players.get(midSeasonTarget.id)
+    if (signedMidSeason?.teamId !== leagueAfterOffseason.userTeamId) {
+      throw new Error('Mid-season signFreeAgent did not assign the player to the user team')
+    }
+    console.log('OK: signed a free agent mid-season after cutting a roster spot')
+  }
+
   await playSeason(leagueId)
   const league2 = await db.leagues.get(leagueId)
   if (league2?.phase !== 'complete') throw new Error('Second season did not complete')

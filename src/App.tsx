@@ -241,6 +241,8 @@ function RosterView({
   )
   const [moving, setMoving] = useState<number | null>(null)
   const [optimizing, setOptimizing] = useState(false)
+  const [cuttingId, setCuttingId] = useState<number | null>(null)
+  const [cutError, setCutError] = useState<string | null>(null)
 
   if (!team || !roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
@@ -311,6 +313,19 @@ function RosterView({
     }
   }
 
+  const handleCut = async (playerId: number, name: string) => {
+    if (!window.confirm(`Cut ${name}? They'll become a free agent and you'll free up their cap hit.`)) return
+    setCutError(null)
+    setCuttingId(playerId)
+    try {
+      await cutPlayer(leagueId, playerId)
+    } catch (err) {
+      setCutError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCuttingId(null)
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
@@ -334,6 +349,8 @@ function RosterView({
           </button>
         )}
       </div>
+
+      {cutError && <p className="text-sm text-red-400 mb-3">{cutError}</p>}
 
       {POSITION_ORDER.map((pos) => {
         const players = byPosition.get(pos)
@@ -367,6 +384,7 @@ function RosterView({
                   <th className="py-1 pl-4 pr-2 text-right w-20">Salary</th>
                   <th className="py-1 px-2 text-right w-12">Yrs</th>
                   <th className="py-1 pl-6 text-left">Season</th>
+                  {editable && <th className="py-1 pl-4 w-16"></th>}
                 </tr>
               </thead>
               <tbody>
@@ -433,6 +451,18 @@ function RosterView({
                       <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
                         {seasonStatLine(p.position, statTotals.get(p.id))}
                       </td>
+                      {editable && (
+                        <td className="py-1 pl-4 text-right">
+                          <button
+                            onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
+                            disabled={cuttingId === p.id}
+                            className="px-2 py-0.5 border border-red-800 text-red-400 rounded text-[10px] disabled:opacity-30"
+                            title="Cut this player and make them a free agent"
+                          >
+                            Cut
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   )
                 })}

@@ -481,11 +481,13 @@ export async function advanceToFreeAgency(leagueId: number) {
   return { retiredCount: retiredIds.length, freeAgentCount }
 }
 
-/** Releases a player from their team during the pre-free-agency resign window, freeing up their cap hit. */
+/** Releases a player from their team, freeing up their cap hit and returning them to the free agent pool. */
 export async function cutPlayer(leagueId: number, playerId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
-  if (league.phase !== 'resign') throw new Error('Can only cut players before free agency opens')
+  if (!['resign', 'freeagency', 'regular', 'playoffs'].includes(league.phase)) {
+    throw new Error('Cannot cut players right now')
+  }
   if (league.userTeamId == null) throw new Error('League has no user team')
 
   const player = await db.players.get(playerId)
