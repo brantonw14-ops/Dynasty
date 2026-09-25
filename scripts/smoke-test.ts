@@ -6,6 +6,7 @@ import {
   createLeague,
   cutPlayer,
   deleteLeague,
+  DRAFT_ROUNDS,
   getDraftBoard,
   getSeasonHistory,
   makeUserDraftPick,
@@ -20,6 +21,7 @@ import {
 } from '../src/engine/league'
 import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
+import { buildGameReasons, classifyGamePerformance } from '../src/engine/gameReport'
 import { passerRating } from '../src/engine/gameSim'
 import { computePositionOverall, computeTeamOverall, MIN_OVERALL, rosterNeeds } from '../src/engine/players'
 import { marketSalary } from '../src/engine/salary'
@@ -92,6 +94,32 @@ async function assertSeasonSane(leagueId: number, season: number) {
   const totalTDs = stats.reduce((s, r) => s + r.passTDs + r.rushTDs + r.recTDs, 0)
   if (totalTDs === 0) throw new Error('No touchdowns recorded all season - box score generation looks broken')
   console.log('OK: player game stats recorded with sane totals')
+
+  // Game report: pick the user's most recent game this season, classify
+  // every player's performance, and generate the "why we won/lost"
+  // breakdown - should never crash and should always produce at least one
+  // reason line.
+  const leagueForReport = await db.leagues.get(leagueId)
+  if (leagueForReport?.userTeamId != null) {
+    const userTeamId = leagueForReport.userTeamId
+    const userGames = games.filter((g) => g.homeTeamId === userTeamId || g.awayTeamId === userTeamId)
+    if (userGames.length === 0) throw new Error('User team has no games to build a game report from')
+    const reportGame = userGames[userGames.length - 1]
+    const reportStats = stats.filter((s) => s.gameId === reportGame.id && s.teamId === userTeamId)
+    if (reportStats.length === 0) throw new Error('No player stats found for the user team on their own game')
+    const graded = reportStats
+      .map((s) => classifyGamePerformance(s.position, s))
+      .filter((tag): tag is 'good' | 'bad' => tag !== null)
+    const isHome = reportGame.homeTeamId === userTeamId
+    const myScore = isHome ? reportGame.homeScore : reportGame.awayScore
+    const oppScore = isHome ? reportGame.awayScore : reportGame.homeScore
+    const reasons = buildGameReasons(reportStats, myScore > oppScore, myScore, oppScore)
+    if (reasons.length === 0) throw new Error('Game report produced no reasons for the result')
+    console.log(
+      `game report: ${graded.length} graded performances, ${reasons.length} reason(s) for a ${myScore}-${oppScore} result`,
+    )
+    console.log('OK: game report classification and reasons generate without error')
+  }
 
   const qbStats = stats.filter((s) => s.position === 'QB' && s.passAttempts > 0)
   if (qbStats.length === 0) throw new Error('No QB pass-attempt stats recorded')
@@ -762,6 +790,13 @@ async function main() {
     throw new Error(`Expected 1-3 prospects at the overall cap, got ${eliteProspects.length}`)
   }
 
+  const teamCountForDraft = (await db.teams.toArray()).length
+  const expectedTotalPicks = teamCountForDraft * DRAFT_ROUNDS
+  if (board.totalPicks !== expectedTotalPicks) {
+    throw new Error(`Expected ${expectedTotalPicks} total picks (${teamCountForDraft} teams x ${DRAFT_ROUNDS} rounds), got ${board.totalPicks}`)
+  }
+  console.log(`OK: draft is exactly ${DRAFT_ROUNDS} rounds (${expectedTotalPicks} total picks across ${teamCountForDraft} teams)`)
+
   // Cutting should also work mid-draft, so a user can shed a weak roster
   // spot to make room for the pick they're about to make.
   const draftCutCandidate = (await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()).sort(
@@ -772,6 +807,9 @@ async function main() {
   if (draftCutAfter?.teamId !== null) throw new Error('Cutting during the draft did not release the player to free agency')
   console.log('OK: cut a player during the draft')
 
+  // Every team gets exactly one pick per round now (best-player-available
+  // once their needs are filled, not skipped) - the user should get
+  // exactly DRAFT_ROUNDS picks total, one per round.
   let guard = 0
   while (board && board.pickedIndices.size < board.totalPicks && guard < board.totalPicks + 5) {
     guard++
@@ -779,16 +817,28 @@ async function main() {
     const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
     const userRoster = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
     const needs = new Set(rosterNeeds(userRoster))
-    const pick = available.filter((p) => needs.has(p.position)).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+    const pick =
+      available.filter((p) => needs.has(p.position)).sort((a, b) => b.ratings.overall - a.ratings.overall)[0] ??
+      [...available].sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
     if (!pick) break
     await makeUserDraftPick(leagueId, pick.index)
     draftedCount++
     board = await getDraftBoard(leagueId)
   }
   console.log(`OK: user made ${draftedCount} draft picks interactively`)
+  if (draftedCount !== DRAFT_ROUNDS) {
+    throw new Error(`Expected the user to get exactly ${DRAFT_ROUNDS} draft picks (one per round), got ${draftedCount}`)
+  }
 
   const rosterCountAfter = await db.players.count()
   const leagueAfterOffseason = await db.leagues.get(leagueId)
+
+  if (rosterCountAfter !== rosterCountBeforeDraft + expectedTotalPicks) {
+    throw new Error(
+      `Expected exactly ${expectedTotalPicks} players added by the draft (no skipped picks), went from ${rosterCountBeforeDraft} to ${rosterCountAfter}`,
+    )
+  }
+  console.log(`OK: draft added exactly ${expectedTotalPicks} players with no skipped picks`)
 
   console.log('roster count before/after FA+draft:', rosterCountBefore, rosterCountAfterFA, rosterCountAfter)
   console.log('season after offseason:', leagueAfterOffseason?.season, leagueAfterOffseason?.phase)

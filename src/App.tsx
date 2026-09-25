@@ -22,6 +22,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
+import { buildGameReasons, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
 import {
   computePositionOverall,
   computeTeamOverall,
@@ -33,7 +34,17 @@ import { passerRating } from './engine/gameSim'
 import { marketSalary } from './engine/salary'
 import { gradeSeasonPerformance, type SeasonGrade } from './engine/seasonPerformance'
 import { computeConferenceSeeds, computeStandings } from './engine/standings'
-import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
+import type {
+  Conference,
+  Division,
+  GameResult,
+  LeaguePhase,
+  Player,
+  PlayerGameStats,
+  PlayoffRound,
+  Position,
+  Team,
+} from './types'
 
 const GRADE_COLORS: Record<SeasonGrade, string> = {
   A: 'text-green-400',
@@ -587,6 +598,168 @@ function RosterView({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+const OUTCOME_TAG_COLORS: Record<'good' | 'bad', string> = {
+  good: 'text-green-400',
+  bad: 'text-red-400',
+}
+
+/**
+ * Post-game breakdown for the user's own team: pick any game they played
+ * this season, see who actually played well or poorly (by box score, not
+ * just gut feel), and a plain-English read on what decided the result - so
+ * a loss points to an actual roster weakness instead of just a final score.
+ */
+function GameReportView({
+  leagueId,
+  userTeamId,
+  season,
+  teamName,
+}: {
+  leagueId: number
+  userTeamId: number
+  season: number
+  teamName: (id: number) => string
+}) {
+  const games = useLiveQuery(
+    () =>
+      db.games
+        .where('leagueId')
+        .equals(leagueId)
+        .and((g) => g.season === season && (g.homeTeamId === userTeamId || g.awayTeamId === userTeamId))
+        .toArray(),
+    [leagueId, season, userTeamId],
+  )
+  const roster = useLiveQuery(() => db.players.where('teamId').equals(userTeamId).toArray(), [userTeamId])
+  const [selectedGameId, setSelectedGameId] = useState<number | null>(null)
+
+  const sortedGames = games
+    ? [...games].sort((a, b) => {
+        const rank = (g: GameResult) => (g.round ? 1000 + ROUND_ORDER.indexOf(g.round) : g.week)
+        return rank(b) - rank(a)
+      })
+    : []
+  const selectedGame = sortedGames.find((g) => g.id === selectedGameId) ?? sortedGames[0] ?? null
+
+  const statsForGame = useLiveQuery(
+    (): Promise<PlayerGameStats[]> =>
+      selectedGame
+        ? db.playerGameStats.where('gameId').equals(selectedGame.id).toArray()
+        : Promise.resolve([]),
+    [selectedGame?.id],
+  )
+
+  if (!games || !roster || !statsForGame) return <p className="text-sm text-gray-500">Loading game report...</p>
+  if (sortedGames.length === 0 || !selectedGame) {
+    return <p className="text-sm text-gray-500">No games played yet this season.</p>
+  }
+
+  const isHome = selectedGame.homeTeamId === userTeamId
+  const myScore = isHome ? selectedGame.homeScore : selectedGame.awayScore
+  const oppScore = isHome ? selectedGame.awayScore : selectedGame.homeScore
+  const oppTeamId = isHome ? selectedGame.awayTeamId : selectedGame.homeTeamId
+  const won = myScore > oppScore
+  const tied = myScore === oppScore
+
+  const myStatLines = statsForGame.filter((s) => s.teamId === userTeamId)
+  const rosterById = new Map(roster.map((p) => [p.id, p]))
+
+  const graded = myStatLines
+    .map((s) => {
+      const tag = classifyGamePerformance(s.position, s)
+      const player = rosterById.get(s.playerId)
+      if (!tag || !player) return null
+      return { player, tag, blurb: performanceBlurb(s.position, s, tag) }
+    })
+    .filter((x): x is { player: Player; tag: 'good' | 'bad'; blurb: string } => x !== null)
+
+  const goodPerformers = graded.filter((g) => g.tag === 'good')
+  const badPerformers = graded.filter((g) => g.tag === 'bad')
+  const reasons = won || tied ? [] : buildGameReasons(myStatLines, won, myScore, oppScore)
+  const winReasons = won ? buildGameReasons(myStatLines, won, myScore, oppScore) : []
+
+  const roundLabel = selectedGame.round
+    ? selectedGame.round[0].toUpperCase() + selectedGame.round.slice(1)
+    : `Week ${selectedGame.week}`
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <select
+          className="border rounded text-sm px-2 py-1 bg-transparent"
+          value={selectedGame.id}
+          onChange={(e) => setSelectedGameId(Number(e.target.value))}
+        >
+          {sortedGames.map((g) => {
+            const gIsHome = g.homeTeamId === userTeamId
+            const gMy = gIsHome ? g.homeScore : g.awayScore
+            const gOpp = gIsHome ? g.awayScore : g.homeScore
+            const gOppId = gIsHome ? g.awayTeamId : g.homeTeamId
+            const label = g.round ? g.round[0].toUpperCase() + g.round.slice(1) : `Week ${g.week}`
+            const result = gMy > gOpp ? 'W' : gMy < gOpp ? 'L' : 'T'
+            return (
+              <option key={g.id} value={g.id} className="text-black">
+                {label} - {result} {gMy}-{gOpp} vs {teamName(gOppId)}
+              </option>
+            )
+          })}
+        </select>
+        <p className="text-sm text-gray-500">
+          {roundLabel} &middot;{' '}
+          <span className={won ? 'text-green-400 font-semibold' : tied ? 'text-gray-300' : 'text-red-400 font-semibold'}>
+            {won ? 'WIN' : tied ? 'TIE' : 'LOSS'} {myScore}-{oppScore}
+          </span>{' '}
+          vs {teamName(oppTeamId)}
+        </p>
+      </div>
+
+      <div className="mb-6 border rounded p-3">
+        <h3 className="text-sm font-semibold text-gray-500 mb-2">
+          {won ? 'What went right' : tied ? 'How it played out' : 'Why we lost'}
+        </h3>
+        <ul className="text-sm space-y-1 list-disc list-inside text-gray-300">
+          {(won ? winReasons : reasons).map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+          {tied && <li>Game ended tied - review the individual performances below for what to fix.</li>}
+        </ul>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <h3 className="text-sm font-semibold text-green-400 mb-2">Played Well</h3>
+          {goodPerformers.length === 0 && <p className="text-xs text-gray-600">No standout performances this game.</p>}
+          <ul className="text-sm space-y-1.5">
+            {goodPerformers.map(({ player, blurb }) => (
+              <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
+                <span>
+                  {player.firstName} {player.lastName}{' '}
+                  <span className="text-gray-500 text-xs">({player.position})</span>
+                </span>
+                <span className={`text-xs whitespace-nowrap ${OUTCOME_TAG_COLORS.good}`}>{blurb}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold text-red-400 mb-2">Played Poorly</h3>
+          {badPerformers.length === 0 && <p className="text-xs text-gray-600">No poor performances this game.</p>}
+          <ul className="text-sm space-y-1.5">
+            {badPerformers.map(({ player, blurb }) => (
+              <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
+                <span>
+                  {player.firstName} {player.lastName}{' '}
+                  <span className="text-gray-500 text-xs">({player.position})</span>
+                </span>
+                <span className={`text-xs whitespace-nowrap ${OUTCOME_TAG_COLORS.bad}`}>{blurb}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1324,7 +1497,8 @@ function DraftView({
   return (
     <div>
       <p className="text-sm text-gray-500 mb-2">
-        Pick {board.pickNumber} of {board.totalPicks}
+        Round {board.round} of {board.totalRounds} &middot; Pick {board.pickInRound} of {board.picksPerRound}{' '}
+        (#{board.pickNumber} overall)
         {board.currentTeamId != null && (
           <>
             {' '}
@@ -1383,7 +1557,12 @@ function DraftView({
                 <td className="py-1 pr-4 whitespace-nowrap">
                   {p.firstName} {p.lastName}
                 </td>
-                <td className="py-1 pr-4">{p.position}</td>
+                <td className="py-1 pr-4">
+                  {p.position}
+                  {needed && (
+                    <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-900 text-amber-200">need</span>
+                  )}
+                </td>
                 <td className="py-1 pr-4 text-right">{p.age}</td>
                 <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
                 <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
@@ -1396,8 +1575,7 @@ function DraftView({
                 <td className="py-1 text-right">
                   <button
                     onClick={() => handlePick(p.index)}
-                    disabled={!board.isUserTurn || !needed || pickingIndex === p.index}
-                    title={!needed ? `Your roster doesn't need another ${p.position}` : undefined}
+                    disabled={!board.isUserTurn || pickingIndex === p.index}
                     className="px-2 py-1 border rounded text-xs disabled:opacity-40 whitespace-nowrap"
                   >
                     {pickingIndex === p.index ? '...' : 'Draft'}
@@ -1561,7 +1739,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advancing, setAdvancing] = useState(false)
-  const [tab, setTab] = useState<'league' | 'roster' | 'trade' | 'freeagents' | 'stats' | 'history'>('league')
+  const [tab, setTab] = useState<'league' | 'roster' | 'gamereport' | 'trade' | 'freeagents' | 'stats' | 'history'>(
+    'league',
+  )
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -1715,6 +1895,16 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             )}
             {league.userTeamId != null && (
               <button
+                onClick={() => setTab('gamereport')}
+                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                  tab === 'gamereport' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+                }`}
+              >
+                Game Report
+              </button>
+            )}
+            {league.userTeamId != null && (
+              <button
                 onClick={() => setTab('trade')}
                 className={`px-1 py-2 text-sm border-b-2 -mb-px ${
                   tab === 'trade' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
@@ -1753,6 +1943,14 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
 
           {tab === 'roster' && league.userTeamId != null && (
             <RosterView teamId={league.userTeamId} leagueId={leagueId} season={league.season} editable />
+          )}
+          {tab === 'gamereport' && league.userTeamId != null && (
+            <GameReportView
+              leagueId={leagueId}
+              userTeamId={league.userTeamId}
+              season={league.season}
+              teamName={teamName}
+            />
           )}
           {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
           {tab === 'freeagents' && league.userTeamId != null && (

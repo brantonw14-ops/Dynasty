@@ -1,6 +1,6 @@
 import { db } from '../db'
 import type { Conference, DraftPickLogEntry, Division, GameResult, Player, PlayoffRound, Position, Team } from '../types'
-import { generateDraftClass, prospectToPlayer, type CollegeProspect } from './draft'
+import { generateDraftClass, generateDraftClassPositions, prospectToPlayer, type CollegeProspect } from './draft'
 import { computeCapSpace, expireContractsWithAiRetention, runFreeAgency } from './freeAgency'
 import { simGame, type PlayerBoxScore } from './gameSim'
 import { applyGamePerformance } from './inSeasonProgression'
@@ -632,16 +632,20 @@ export async function optimizeDepthChart(teamId: number) {
   if (updates.length > 0) await db.players.bulkPut(updates as never[])
 }
 
+/** A real NFL draft is exactly 7 rounds; every team gets one pick each round unless picks are traded (not modeled yet). */
+export const DRAFT_ROUNDS = 7
+
 /**
  * Offseason step 2: closes the user's free agency window by running AI
  * free agency (every team except the user's, signing from whatever's left
- * in the pool), then sets up an interactive rookie draft - worst record
- * picks first, same order every round. The prospect pool itself is never
- * persisted (regenerated on demand from draftSeed); only which prospects
- * are taken and whose turn it is lives on the league row. Auto-advances
- * through any AI-only picks immediately so the draft screen opens right on
- * the user's first turn (or fully resolves and rolls into the regular
- * season if the user has no team).
+ * in the pool), then sets up an interactive rookie draft - 7 rounds, one
+ * pick per team per round, worst record picks first, same order every
+ * round (no snake, matching how the real NFL draft order works). The
+ * prospect pool itself is never persisted (regenerated on demand from
+ * draftSeed); only which prospects are taken and whose turn it is lives on
+ * the league row. Auto-advances through any AI-only picks immediately so
+ * the draft screen opens right on the user's first turn (or fully resolves
+ * and rolls into the regular season if the user has no team).
  */
 export async function beginDraft(leagueId: number) {
   const league = await db.leagues.get(leagueId)
@@ -670,16 +674,17 @@ export async function beginDraft(leagueId: number) {
     await db.players.bulkPut(signings.map((s) => s.player) as never[])
   }
 
-  // The draft class's positions are fixed at the moment the draft opens -
-  // one prospect per currently-open roster spot, league-wide.
-  const draftPositions: Position[] = []
-  for (const team of teams) {
-    draftPositions.push(...rosterNeeds(rostersByTeam.get(team.id) ?? []))
-  }
+  // Exactly 7 rounds x one pick per team, like the real draft - the class's
+  // position mix reflects the league-wide roster shape, not any one team's
+  // needs, since every team drafts regardless of whether they "need" that
+  // pick this round.
+  const draftSeed = league.season * 7919 + 3
+  const totalPicks = draftOrderTeamIds.length * DRAFT_ROUNDS
+  const draftPositions = generateDraftClassPositions(league.season * 7919 + 5, totalPicks)
 
   await db.leagues.update(leagueId, {
     phase: 'draft',
-    draftSeed: league.season * 7919 + 3,
+    draftSeed,
     draftPositions,
     draftOrderTeamIds,
     draftOrderIndex: 0,
@@ -698,6 +703,10 @@ export interface DraftBoardState {
   isUserTurn: boolean
   pickNumber: number
   totalPicks: number
+  round: number
+  totalRounds: number
+  pickInRound: number
+  picksPerRound: number
   log: DraftPickLogEntry[]
 }
 
@@ -710,23 +719,41 @@ export async function getDraftBoard(leagueId: number): Promise<DraftBoardState |
   const order = league.draftOrderTeamIds
   const orderIndex = league.draftOrderIndex ?? 0
   const currentTeamId = order.length > 0 ? order[orderIndex % order.length] : null
+  const pickNumber = (league.draftLog?.length ?? 0) + 1
 
   return {
     prospects,
     pickedIndices,
     currentTeamId,
     isUserTurn: currentTeamId != null && currentTeamId === league.userTeamId,
-    pickNumber: (league.draftLog?.length ?? 0) + 1,
+    pickNumber,
     totalPicks: prospects.length,
+    round: Math.min(DRAFT_ROUNDS, Math.floor((pickNumber - 1) / order.length) + 1),
+    totalRounds: DRAFT_ROUNDS,
+    pickInRound: ((pickNumber - 1) % order.length) + 1,
+    picksPerRound: order.length,
     log: league.draftLog ?? [],
   }
 }
 
 /**
- * Auto-picks for every AI team's turn (best available prospect at a
- * position they still need), stopping either at the user's next turn or
- * once the draft is fully resolved (rolling straight into the regular
- * season in that case). `stopBeforeUserTurn: false` runs the whole
+ * Picks the best prospect still on the board for a team: prefers a position
+ * they actually still need (real roster shape, not just "have zero"), and
+ * only falls back to best-player-available once every remaining need is
+ * filled - same as a real team drafting for value once their obvious holes
+ * are addressed.
+ */
+function bestAvailableFor(prospects: CollegeProspect[], picked: Set<number>, needs: Position[]): CollegeProspect | undefined {
+  const remaining = prospects.filter((p) => !picked.has(p.index))
+  const needed = remaining.filter((p) => needs.includes(p.position)).sort((a, b) => b.ratings.overall - a.ratings.overall)
+  if (needed.length > 0) return needed[0]
+  return remaining.sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+}
+
+/**
+ * Auto-picks for every AI team's turn, stopping either at the user's next
+ * turn or once all 7 rounds are complete (rolling straight into the
+ * regular season in that case). `stopBeforeUserTurn: false` runs the whole
  * remaining draft with no pause, used when there's no user team to wait on.
  */
 async function advanceDraft(leagueId: number, { stopBeforeUserTurn }: { stopBeforeUserTurn: boolean }) {
@@ -739,36 +766,21 @@ async function advanceDraft(leagueId: number, { stopBeforeUserTurn }: { stopBefo
   const picked = new Set(league.draftPickedIndices ?? [])
   const log = [...(league.draftLog ?? [])]
   let orderIndex = league.draftOrderIndex ?? 0
-  let consecutiveSkips = 0
 
-  while (picked.size < prospects.length && consecutiveSkips < order.length) {
+  while (picked.size < prospects.length) {
     const teamId = order[orderIndex % order.length]
     if (stopBeforeUserTurn && teamId === league.userTeamId) break
 
     const roster = await db.players.where('teamId').equals(teamId).toArray()
     const needs = rosterNeeds(roster)
-    if (needs.length === 0) {
-      orderIndex++
-      consecutiveSkips++
-      continue
-    }
-
-    const best = prospects
-      .filter((p) => !picked.has(p.index) && needs.includes(p.position))
-      .sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
-
-    if (!best) {
-      orderIndex++
-      consecutiveSkips++
-      continue
-    }
+    const best = bestAvailableFor(prospects, picked, needs)
+    if (!best) break // shouldn't happen - totalPicks always matches prospects.length
 
     const depthOrder = nextDepthOrder(roster, best.position)
     await db.players.add(prospectToPlayer(best, teamId, depthOrder) as never)
     picked.add(best.index)
     log.push({ pickNumber: log.length + 1, teamId, prospectIndex: best.index })
     orderIndex++
-    consecutiveSkips = 0
   }
 
   await db.leagues.update(leagueId, {
@@ -777,21 +789,9 @@ async function advanceDraft(leagueId: number, { stopBeforeUserTurn }: { stopBefo
     draftLog: log,
   })
 
-  const draftIsDone =
-    picked.size >= prospects.length ||
-    consecutiveSkips >= order.length ||
-    (await allTeamsRosterFull(order))
-  if (draftIsDone) {
+  if (picked.size >= prospects.length) {
     await finalizeDraft(leagueId)
   }
-}
-
-async function allTeamsRosterFull(teamIds: number[]) {
-  for (const teamId of teamIds) {
-    const roster = await db.players.where('teamId').equals(teamId).toArray()
-    if (rosterNeeds(roster).length > 0) return false
-  }
-  return true
 }
 
 /** Makes the user's own draft pick, then auto-advances through any AI turns up to the user's next pick (or the end of the draft). */
@@ -815,10 +815,6 @@ export async function makeUserDraftPick(leagueId: number, prospectIndex: number)
   if (!prospect) throw new Error('Invalid prospect')
 
   const roster = await db.players.where('teamId').equals(league.userTeamId).toArray()
-  if (!rosterNeeds(roster).includes(prospect.position)) {
-    throw new Error(`Your roster doesn't need another ${prospect.position} right now`)
-  }
-
   const depthOrder = nextDepthOrder(roster, prospect.position)
   await db.players.add(prospectToPlayer(prospect, league.userTeamId, depthOrder) as never)
 

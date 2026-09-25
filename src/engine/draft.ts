@@ -1,9 +1,37 @@
 import { COLLEGES } from './colleges'
-import { clamp, generateRatings, potentialGap } from './players'
+import { clamp, generateRatings, potentialGap, ROSTER_SHAPE } from './players'
 import { randomName } from './names'
 import { createRng, randInt, randNormal, type Rng } from './rng'
 import { marketSalary } from './salary'
 import type { Player, Position, Ratings } from '../types'
+
+/**
+ * A real draft class isn't shaped by any one team's needs - it's just
+ * however many players at each position declared for the draft that year.
+ * Approximates that by weighting toward the same rough position mix a full
+ * roster carries (a lot of OL/DL/WR, very few K/P), rather than pulling
+ * from what teams happen to be short on.
+ */
+export function generateDraftClassPositions(seed: number, count: number): Position[] {
+  const rng = createRng(seed)
+  const positions = Object.keys(ROSTER_SHAPE) as Position[]
+  const weights = positions.map((p) => ROSTER_SHAPE[p])
+  const totalWeight = weights.reduce((a, b) => a + b, 0)
+  const result: Position[] = []
+  for (let i = 0; i < count; i++) {
+    let r = rng() * totalWeight
+    let chosen = positions[positions.length - 1]
+    for (let j = 0; j < positions.length; j++) {
+      r -= weights[j]
+      if (r <= 0) {
+        chosen = positions[j]
+        break
+      }
+    }
+    result.push(chosen)
+  }
+  return result
+}
 
 export interface CollegeProspect {
   index: number
