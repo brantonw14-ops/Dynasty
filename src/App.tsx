@@ -1297,33 +1297,63 @@ function TradeView({
           <div className="flex flex-col gap-2">
             {suggestedTrades.map((s) => {
               const key = `${s.otherTeamId}-${s.giveIds[0]}-${s.getIds[0]}`
-              const giveP = myRoster.find((p) => p.id === s.giveIds[0])
+              const netSalary = s.get.salary - s.give.salary
               return (
-                <div key={key} className="flex items-center justify-between gap-3 text-xs border-b border-emerald-900 pb-2 last:border-0 last:pb-0">
-                  <div>
-                    <span className="text-emerald-300 font-medium">{teamName(s.otherTeamId)}</span>
-                    <span className="text-gray-400"> &middot; {s.reason}</span>
-                    {giveP && (
-                      <span className="text-gray-500">
-                        {' '}
-                        &middot; you send {giveP.firstName} {giveP.lastName} ({giveP.position})
-                      </span>
-                    )}
+                <div key={key} className="border-b border-emerald-900 pb-2 last:border-0 last:pb-0">
+                  <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
+                    <span>
+                      <span className="text-emerald-300 font-medium">{teamName(s.otherTeamId)}</span>
+                      <span className="text-gray-400"> &middot; {s.reason}</span>
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {suggestionResult?.key === key && (
+                        <span className={suggestionResult.accepted ? 'text-emerald-400' : 'text-red-400'}>
+                          {suggestionResult.accepted ? 'Done!' : suggestionResult.reason}
+                        </span>
+                      )}
+                      <button
+                        onClick={() => handleMakeSuggestion(s, key)}
+                        disabled={makingSuggestionKey === key}
+                        className="px-2 py-1 bg-emerald-600 text-white rounded text-[11px] disabled:opacity-50"
+                      >
+                        {makingSuggestionKey === key ? 'Trading...' : 'Make Trade'}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {suggestionResult?.key === key && (
-                      <span className={suggestionResult.accepted ? 'text-emerald-400' : 'text-red-400'}>
-                        {suggestionResult.accepted ? 'Done!' : suggestionResult.reason}
-                      </span>
-                    )}
-                    <button
-                      onClick={() => handleMakeSuggestion(s, key)}
-                      disabled={makingSuggestionKey === key}
-                      className="px-2 py-1 bg-emerald-600 text-white rounded text-[11px] disabled:opacity-50"
-                    >
-                      {makingSuggestionKey === key ? 'Trading...' : 'Make Trade'}
-                    </button>
+                  <div className="grid grid-cols-2 gap-3 text-[11px]">
+                    <div className="bg-black/20 rounded px-2 py-1.5">
+                      <div className="text-gray-500 mb-0.5">You send</div>
+                      <div className="flex items-center justify-between">
+                        <span>
+                          {s.give.firstName} {s.give.lastName} <span className="text-gray-500">({s.give.position})</span>
+                        </span>
+                        <span className="flex items-center gap-2 shrink-0">
+                          <span className={overallColor(s.give.overall)}>{s.give.overall} OVR</span>
+                          <span className="text-yellow-400">{s.give.potential} POT</span>
+                          <span className="text-gray-400 whitespace-nowrap">{formatMoney(s.give.salary)}</span>
+                        </span>
+                      </div>
+                    </div>
+                    <div className="bg-black/20 rounded px-2 py-1.5">
+                      <div className="text-gray-500 mb-0.5">You get</div>
+                      <div className="flex items-center justify-between">
+                        <span>
+                          {s.get.firstName} {s.get.lastName} <span className="text-gray-500">({s.get.position})</span>
+                        </span>
+                        <span className="flex items-center gap-2 shrink-0">
+                          <span className={overallColor(s.get.overall)}>{s.get.overall} OVR</span>
+                          <span className="text-yellow-400">{s.get.potential} POT</span>
+                          <span className="text-gray-400 whitespace-nowrap">{formatMoney(s.get.salary)}</span>
+                        </span>
+                      </div>
+                    </div>
                   </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Net cap impact:{' '}
+                    <span className={netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-400'}>
+                      {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
+                    </span>
+                  </p>
                 </div>
               )
             })}

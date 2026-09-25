@@ -1265,11 +1265,36 @@ export async function removeTradeOffer(leagueId: number, offerId: number) {
   })
 }
 
+/** One player's side of a suggested trade, with enough detail to render a full breakdown without extra fetches. */
+export interface SuggestedTradePlayer {
+  id: number
+  firstName: string
+  lastName: string
+  position: Position
+  overall: number
+  potential: number
+  salary: number
+}
+
 export interface SuggestedTrade {
   otherTeamId: number
+  give: SuggestedTradePlayer
+  get: SuggestedTradePlayer
   giveIds: number[]
   getIds: number[]
   reason: string
+}
+
+function toSuggestedTradePlayer(p: Player): SuggestedTradePlayer {
+  return {
+    id: p.id,
+    firstName: p.firstName,
+    lastName: p.lastName,
+    position: p.position,
+    overall: p.ratings.overall,
+    potential: p.ratings.potential,
+    salary: p.contract?.salary ?? 0,
+  }
 }
 
 /**
@@ -1279,7 +1304,9 @@ export interface SuggestedTrade {
  * (runs the same evaluateTrade fairness check proposeTrade uses, from the
  * AI's own side - it never suggests a deal the AI wouldn't take). Meant to
  * surface as a one-click "Make this trade" list, not something the user has
- * to hunt for manually.
+ * to hunt for manually. Capped at a couple of suggestions per opposing team
+ * so the list reads as offers from across the league, not just whichever
+ * team happens to come first with a deep bench.
  */
 export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<SuggestedTrade[]> {
   const league = await db.leagues.get(leagueId)
@@ -1295,6 +1322,7 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
     myByPosition.set(p.position, list)
   }
 
+  const maxPerTeam = 2
   const suggestions: SuggestedTrade[] = []
   for (const team of teams) {
     if (team.id === league.userTeamId) continue
@@ -1302,10 +1330,11 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
 
     const theirRoster = await db.players.where('teamId').equals(team.id).toArray()
     const theirNeeds = new Set(rosterNeeds(theirRoster))
+    let addedForTeam = 0
 
     const theirCandidates = [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15)
     for (const theirs of theirCandidates) {
-      if (suggestions.length >= limit) break
+      if (suggestions.length >= limit || addedForTeam >= maxPerTeam) break
       const myBest = (myByPosition.get(theirs.position) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
       const wouldUpgrade = myNeeds.has(theirs.position) || !myBest || theirs.ratings.overall > myBest.ratings.overall + 4
       if (!wouldUpgrade) continue
@@ -1327,12 +1356,15 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
 
         suggestions.push({
           otherTeamId: team.id,
+          give: toSuggestedTradePlayer(give),
+          get: toSuggestedTradePlayer(theirs),
           giveIds: [give.id],
           getIds: [theirs.id],
           reason: myNeeds.has(theirs.position)
             ? `Fills your need at ${theirs.position}`
             : `Upgrade at ${theirs.position} (${theirs.ratings.overall} OVR vs your ${myBest?.ratings.overall ?? 0})`,
         })
+        addedForTeam++
         break
       }
     }
