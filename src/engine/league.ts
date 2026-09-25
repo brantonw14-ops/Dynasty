@@ -485,7 +485,7 @@ export async function advanceToFreeAgency(leagueId: number) {
 export async function cutPlayer(leagueId: number, playerId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
-  if (!['resign', 'freeagency', 'regular', 'playoffs'].includes(league.phase)) {
+  if (!['resign', 'freeagency', 'draft', 'regular', 'playoffs'].includes(league.phase)) {
     throw new Error('Cannot cut players right now')
   }
   if (league.userTeamId == null) throw new Error('League has no user team')

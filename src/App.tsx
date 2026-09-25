@@ -96,6 +96,122 @@ function SortHeader({
   )
 }
 
+/**
+ * A "how strong is each position on my team" grid, click a tile to expand
+ * it and see/cut individual players - shared by the Free Agency and Draft
+ * screens so a user can see what they need and make room for it (by
+ * cutting someone) without leaving to the Roster screen.
+ */
+function TeamPositionPanel({ roster, leagueId, needs }: { roster: Player[]; leagueId: number; needs: Position[] }) {
+  const [expanded, setExpanded] = useState<Position | null>(null)
+  const [cuttingId, setCuttingId] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const byPosition = new Map<Position, Player[]>()
+  for (const p of roster) {
+    const list = byPosition.get(p.position) ?? []
+    list.push(p)
+    byPosition.set(p.position, list)
+  }
+  const summary = POSITION_ORDER.map((pos) => {
+    const group = (byPosition.get(pos) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)
+    return {
+      pos,
+      group,
+      positionOverall: group.length > 0 ? Math.round(computePositionOverall(group)) : 0,
+      isNeed: needs.includes(pos),
+    }
+  })
+
+  const handleCut = async (playerId: number, name: string) => {
+    if (!window.confirm(`Cut ${name}? They'll become a free agent and you'll free up their cap hit.`)) return
+    setError(null)
+    setCuttingId(playerId)
+    try {
+      await cutPlayer(leagueId, playerId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCuttingId(null)
+    }
+  }
+
+  return (
+    <div className="mb-6">
+      <h3 className="text-sm font-semibold text-gray-500 mb-2">Your Roster by Position</h3>
+      {error && <p className="text-sm text-red-400 mb-2">{error}</p>}
+      <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-11 gap-2">
+        {summary.map((s) => (
+          <button
+            key={s.pos}
+            onClick={() => setExpanded(expanded === s.pos ? null : s.pos)}
+            className={`rounded border px-2 py-1.5 text-center ${
+              s.isNeed ? 'border-amber-700 bg-amber-900/20' : 'border-gray-700'
+            } ${expanded === s.pos ? 'ring-1 ring-blue-400' : ''}`}
+            title={`Top: ${s.group[0] ? `${s.group[0].firstName} ${s.group[0].lastName} (${s.group[0].ratings.overall})` : 'none'}`}
+          >
+            <div className="text-[10px] text-gray-500">{s.pos}</div>
+            <div className="text-sm font-semibold text-green-400">{s.positionOverall || '-'}</div>
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-gray-600 mt-1">
+        Position overall reflects your starters, not a flat roster average. Amber = a position you currently need.
+        Click a position to see and cut individual players.
+      </p>
+      {expanded && (
+        <div className="mt-2 border rounded p-2 overflow-x-auto">
+          <table className="text-sm border-collapse w-full">
+            <thead>
+              <tr className="text-left text-gray-400 border-b">
+                <th className="py-1 pr-4">Name</th>
+                <th className="py-1 pr-4 text-right">Age</th>
+                <th className="py-1 pr-4 text-right">OVR</th>
+                <th className="py-1 pr-4 text-right">Salary</th>
+                <th className="py-1"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(byPosition.get(expanded) ?? []).length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-1 text-gray-500">
+                    No players at this position.
+                  </td>
+                </tr>
+              )}
+              {(byPosition.get(expanded) ?? [])
+                .slice()
+                .sort((a, b) => b.ratings.overall - a.ratings.overall)
+                .map((p) => (
+                  <tr key={p.id} className="border-b">
+                    <td className="py-1 pr-4 whitespace-nowrap">
+                      {p.firstName} {p.lastName}
+                    </td>
+                    <td className="py-1 pr-4 text-right">{p.age}</td>
+                    <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                    <td className="py-1 pr-4 text-right whitespace-nowrap">
+                      {p.contract ? formatMoney(p.contract.salary) : '-'}
+                    </td>
+                    <td className="py-1 text-right">
+                      <button
+                        onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
+                        disabled={cuttingId === p.id}
+                        className="px-2 py-0.5 border border-red-800 text-red-400 rounded text-[10px] disabled:opacity-30"
+                        title="Cut this player and make them a free agent"
+                      >
+                        Cut
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Generic sort by a value-extractor keyed off SortState.key; falls back to leaving order unchanged for an unknown key. */
 function sortRows<T>(rows: T[], sort: SortState, valueFor: (row: T, key: string) => number | string): T[] {
   const dir = sort.dir === 'asc' ? 1 : -1
@@ -1049,22 +1165,6 @@ function FreeAgencyView({
   const needs = rosterNeeds(roster)
   const capSpace = computeCapSpace(roster)
 
-  const byPosition = new Map<Position, Player[]>()
-  for (const p of roster) {
-    const list = byPosition.get(p.position) ?? []
-    list.push(p)
-    byPosition.set(p.position, list)
-  }
-  const positionSummary = POSITION_ORDER.map((pos) => {
-    const group = (byPosition.get(pos) ?? []).sort((a, b) => a.depthOrder - b.depthOrder)
-    const top = group[0]
-    return {
-      pos,
-      positionOverall: group.length > 0 ? Math.round(computePositionOverall(group)) : 0,
-      topPlayer: top ? `${top.firstName} ${top.lastName} (${top.ratings.overall})` : 'none',
-      isNeed: needs.includes(pos),
-    }
-  })
   const sorted = sortRows(freeAgents, sort, (p, key) => {
     if (key === 'name') return `${p.firstName} ${p.lastName}`
     if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
@@ -1115,26 +1215,7 @@ function FreeAgencyView({
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
 
-      <div className="mb-6">
-        <h3 className="text-sm font-semibold text-gray-500 mb-2">Your Roster by Position</h3>
-        <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-11 gap-2">
-          {positionSummary.map((s) => (
-            <div
-              key={s.pos}
-              className={`rounded border px-2 py-1.5 text-center ${
-                s.isNeed ? 'border-amber-700 bg-amber-900/20' : 'border-gray-700'
-              }`}
-              title={`Top: ${s.topPlayer}`}
-            >
-              <div className="text-[10px] text-gray-500">{s.pos}</div>
-              <div className="text-sm font-semibold text-green-400">{s.positionOverall || '-'}</div>
-            </div>
-          ))}
-        </div>
-        <p className="text-xs text-gray-600 mt-1">
-          Position overall reflects your starters, not a flat roster average. Amber = a position you currently need.
-        </p>
-      </div>
+      <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} />
 
       <table className="w-full text-sm border-collapse">
         <thead>
@@ -1274,6 +1355,10 @@ function DraftView({
             })}
           </ul>
         </details>
+      )}
+
+      {userTeamId != null && (
+        <TeamPositionPanel roster={userRoster} leagueId={leagueId} needs={[...userNeeds]} />
       )}
 
       <table className="w-full text-sm border-collapse">

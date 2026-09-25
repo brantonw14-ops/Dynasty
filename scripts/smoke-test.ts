@@ -762,6 +762,16 @@ async function main() {
     throw new Error(`Expected 1-3 prospects at the overall cap, got ${eliteProspects.length}`)
   }
 
+  // Cutting should also work mid-draft, so a user can shed a weak roster
+  // spot to make room for the pick they're about to make.
+  const draftCutCandidate = (await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()).sort(
+    (a, b) => a.ratings.overall - b.ratings.overall,
+  )[0]
+  await cutPlayer(leagueId, draftCutCandidate.id)
+  const draftCutAfter = await db.players.get(draftCutCandidate.id)
+  if (draftCutAfter?.teamId !== null) throw new Error('Cutting during the draft did not release the player to free agency')
+  console.log('OK: cut a player during the draft')
+
   let guard = 0
   while (board && board.pickedIndices.size < board.totalPicks && guard < board.totalPicks + 5) {
     guard++
