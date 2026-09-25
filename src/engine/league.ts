@@ -1,5 +1,17 @@
 import { db } from '../db'
-import type { Conference, DraftPickLogEntry, Division, GameResult, Player, PlayoffRound, Position, Team } from '../types'
+import type {
+  Conference,
+  DraftPickLogEntry,
+  Division,
+  GameResult,
+  PendingTradeOffer,
+  Player,
+  PlayoffRound,
+  Position,
+  Team,
+  TradedPick,
+  TradePickRef,
+} from '../types'
 import { generateDraftClass, generateDraftClassPositions, prospectToPlayer, type CollegeProspect } from './draft'
 import { computeCapSpace, expireContractsWithAiRetention, runFreeAgency } from './freeAgency'
 import { simGame, type PlayerBoxScore } from './gameSim'
@@ -21,7 +33,7 @@ import { generateSchedule } from './schedule'
 import { adjustPotentialForSeason } from './seasonPerformance'
 import { computeConferenceSeeds, computeStandings, type PlayoffSeed } from './standings'
 import { generateTeams, SALARY_CAP } from './teams'
-import { evaluateTrade, type TradeEvaluation } from './trades'
+import { evaluateTrade, pickValue, playerValue, type TradeEvaluation } from './trades'
 
 export interface TeamPreview {
   index: number
@@ -254,6 +266,8 @@ async function simRegularSeasonWeek(leagueId: number) {
     week: nextWeek,
     phase: isRegularSeasonOver ? 'playoffs' : 'regular',
   })
+
+  await generateTradeOffers(leagueId)
 }
 
 async function currentSeasonRegularGames(leagueId: number, season: number) {
@@ -654,8 +668,36 @@ export async function optimizeDepthChart(teamId: number) {
   if (updates.length > 0) await db.players.bulkPut(updates as never[])
 }
 
-/** A real NFL draft is exactly 7 rounds; every team gets one pick each round unless picks are traded (not modeled yet). */
+/** A real NFL draft is exactly 7 rounds; every team gets one pick each round unless it's been traded away. */
 export const DRAFT_ROUNDS = 7
+
+/** Who currently owns a given future draft pick - the original team, unless it's been traded (see League.tradedPicks). */
+export function pickOwner(tradedPicks: TradedPick[] | undefined, year: number, round: number, originalTeamId: number): number {
+  const entry = tradedPicks?.find((p) => p.year === year && p.round === round && p.originalTeamId === originalTeamId)
+  return entry?.ownerTeamId ?? originalTeamId
+}
+
+/** Every future pick (up to `yearsAhead` seasons out) a team currently owns, across every original slot. */
+export function ownedPicks(
+  tradedPicks: TradedPick[] | undefined,
+  currentSeason: number,
+  allTeamIds: number[],
+  teamId: number,
+  yearsAhead = 5,
+): TradePickRef[] {
+  const picks: TradePickRef[] = []
+  for (let yearsOut = 1; yearsOut <= yearsAhead; yearsOut++) {
+    const year = currentSeason + yearsOut
+    for (let round = 1; round <= DRAFT_ROUNDS; round++) {
+      for (const originalTeamId of allTeamIds) {
+        if (pickOwner(tradedPicks, year, round, originalTeamId) === teamId) {
+          picks.push({ year, round, originalTeamId })
+        }
+      }
+    }
+  }
+  return picks
+}
 
 /**
  * Offseason step 2: closes the user's free agency window by running AI
@@ -740,7 +782,10 @@ export async function getDraftBoard(leagueId: number): Promise<DraftBoardState |
   const pickedIndices = new Set(league.draftPickedIndices ?? [])
   const order = league.draftOrderTeamIds
   const orderIndex = league.draftOrderIndex ?? 0
-  const currentTeamId = order.length > 0 ? order[orderIndex % order.length] : null
+  const currentRound = order.length > 0 ? Math.floor(orderIndex / order.length) + 1 : 1
+  const currentOriginalTeamId = order.length > 0 ? order[orderIndex % order.length] : null
+  const currentTeamId =
+    currentOriginalTeamId != null ? pickOwner(league.tradedPicks, league.season, currentRound, currentOriginalTeamId) : null
   const pickNumber = (league.draftLog?.length ?? 0) + 1
 
   return {
@@ -790,7 +835,9 @@ async function advanceDraft(leagueId: number, { stopBeforeUserTurn }: { stopBefo
   let orderIndex = league.draftOrderIndex ?? 0
 
   while (picked.size < prospects.length) {
-    const teamId = order[orderIndex % order.length]
+    const round = Math.floor(orderIndex / order.length) + 1
+    const originalTeamId = order[orderIndex % order.length]
+    const teamId = pickOwner(league.tradedPicks, league.season, round, originalTeamId)
     if (stopBeforeUserTurn && teamId === league.userTeamId) break
 
     const roster = await db.players.where('teamId').equals(teamId).toArray()
@@ -826,7 +873,9 @@ export async function makeUserDraftPick(leagueId: number, prospectIndex: number)
 
   const order = league.draftOrderTeamIds
   const orderIndex = league.draftOrderIndex ?? 0
-  const currentTeamId = order[orderIndex % order.length]
+  const round = Math.floor(orderIndex / order.length) + 1
+  const originalTeamId = order[orderIndex % order.length]
+  const currentTeamId = pickOwner(league.tradedPicks, league.season, round, originalTeamId)
   if (currentTeamId !== league.userTeamId) throw new Error("It's not your turn to pick")
 
   const picked = new Set(league.draftPickedIndices ?? [])
@@ -882,19 +931,59 @@ async function finalizeDraft(leagueId: number) {
   })
 }
 
+/** Validates that every pick ref is currently owned by the given team, and returns their combined trade value. */
+function resolvePickRefs(
+  tradedPicks: TradedPick[] | undefined,
+  currentSeason: number,
+  teamId: number,
+  refs: TradePickRef[],
+): { valid: boolean; value: number } {
+  let value = 0
+  for (const ref of refs) {
+    if (pickOwner(tradedPicks, ref.year, ref.round, ref.originalTeamId) !== teamId) {
+      return { valid: false, value: 0 }
+    }
+    value += pickValue(ref.round, ref.year - currentSeason)
+  }
+  return { valid: true, value }
+}
+
+function sameRef(a: TradePickRef, b: TradePickRef) {
+  return a.year === b.year && a.round === b.round && a.originalTeamId === b.originalTeamId
+}
+
+/** Re-homes a list of traded picks onto a fresh tradedPicks array (adds/updates entries, never removes history for picks not involved). */
+function applyPickTransfers(existing: TradedPick[], transfers: { ref: TradePickRef; newOwnerTeamId: number }[]): TradedPick[] {
+  const next = [...existing]
+  for (const { ref, newOwnerTeamId } of transfers) {
+    const idx = next.findIndex((p) => sameRef(p, ref))
+    if (idx >= 0) next[idx] = { ...next[idx], ownerTeamId: newOwnerTeamId }
+    else next.push({ ...ref, ownerTeamId: newOwnerTeamId })
+  }
+  return next
+}
+
 /**
- * Proposes a trade: teamA sends `giveIds` and receives `getIds` from teamB.
- * teamB (typically an AI team) evaluates it from their own side; if
- * accepted, the trade executes immediately. Also blocks the deal if it
- * would put teamA over the salary cap - teamB's own roster-need and cap
- * checks happen inside evaluateTrade.
+ * Proposes a trade: teamA sends `giveIds`/`givePicks` and receives
+ * `getIds`/`getPicks` from teamB. teamB (typically an AI team) evaluates it
+ * from their own side, picks folded into the same value comparison as
+ * players; if accepted, the trade executes immediately (players change
+ * teamId, picks change ownership). Also blocks the deal if it would put
+ * teamA over the salary cap - teamB's own roster-need and cap checks happen
+ * inside evaluateTrade.
  */
 export async function proposeTrade(
+  leagueId: number,
   teamAId: number,
   teamBId: number,
   giveIds: number[],
   getIds: number[],
+  givePicks: TradePickRef[] = [],
+  getPicks: TradePickRef[] = [],
 ): Promise<TradeEvaluation> {
+  const league = await db.leagues.get(leagueId)
+  if (!league) return { accepted: false, reason: 'League not found' }
+
   const rosterA = await db.players.where('teamId').equals(teamAId).toArray()
   const rosterB = await db.players.where('teamId').equals(teamBId).toArray()
 
@@ -904,16 +993,45 @@ export async function proposeTrade(
     return { accepted: false, reason: 'Invalid player selection' }
   }
 
-  const evaluation = evaluateTrade(rosterB, getting, giving)
+  const givePicksResolved = resolvePickRefs(league.tradedPicks, league.season, teamAId, givePicks)
+  const getPicksResolved = resolvePickRefs(league.tradedPicks, league.season, teamBId, getPicks)
+  if (!givePicksResolved.valid || !getPicksResolved.valid) {
+    return { accepted: false, reason: 'Invalid draft pick selection' }
+  }
+
+  const evaluation = evaluateTrade(rosterB, getting, giving, getPicksResolved.value, givePicksResolved.value)
   if (!evaluation.accepted) return evaluation
 
-  const givingIds = new Set(giveIds)
-  const resultingA = [...rosterA.filter((p) => !givingIds.has(p.id)), ...getting]
-  const capUsedA = resultingA.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
-  if (capUsedA > SALARY_CAP) {
+  const capCheck = wouldFitUnderCap(rosterA, giveIds, getting)
+  if (!capCheck) {
     return { accepted: false, reason: 'Would put your team over the salary cap' }
   }
 
+  await executeTradeMechanics(leagueId, league.tradedPicks, rosterA, rosterB, giving, getting, teamAId, teamBId, givePicks, getPicks)
+
+  return evaluation
+}
+
+function wouldFitUnderCap(roster: Player[], leavingIds: number[], entering: Player[]): boolean {
+  const leavingSet = new Set(leavingIds)
+  const resulting = [...roster.filter((p) => !leavingSet.has(p.id)), ...entering]
+  const capUsed = resulting.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
+  return capUsed <= SALARY_CAP
+}
+
+/** The actual mechanical swap - player teamIds and pick ownership - shared by proposeTrade and acceptTradeOffer. */
+async function executeTradeMechanics(
+  leagueId: number,
+  tradedPicks: TradedPick[] | undefined,
+  rosterA: Player[],
+  rosterB: Player[],
+  giving: Player[],
+  getting: Player[],
+  teamAId: number,
+  teamBId: number,
+  givePicks: TradePickRef[],
+  getPicks: TradePickRef[],
+) {
   await db.players.bulkPut(
     giving.map((p) => ({ ...p, teamId: teamBId, depthOrder: nextDepthOrder(rosterB, p.position) })) as never[],
   )
@@ -921,7 +1039,182 @@ export async function proposeTrade(
     getting.map((p) => ({ ...p, teamId: teamAId, depthOrder: nextDepthOrder(rosterA, p.position) })) as never[],
   )
 
-  return evaluation
+  if (givePicks.length > 0 || getPicks.length > 0) {
+    const nextTradedPicks = applyPickTransfers(tradedPicks ?? [], [
+      ...givePicks.map((ref) => ({ ref, newOwnerTeamId: teamBId })),
+      ...getPicks.map((ref) => ({ ref, newOwnerTeamId: teamAId })),
+    ])
+    await db.leagues.update(leagueId, { tradedPicks: nextTradedPicks })
+  }
+}
+
+/** Flags/unflags one of the user's own players as available in trade talks - AI teams periodically shop offers for blocked players. */
+export async function toggleTradeBlock(playerId: number) {
+  const player = await db.players.get(playerId)
+  if (!player) throw new Error('Player not found')
+  await db.players.update(playerId, { onTradeBlock: !player.onTradeBlock })
+}
+
+/**
+ * Looks at the user's trade-block players and, with some randomness, has
+ * one AI team put together an offer for one of them - a player (and
+ * sometimes a sweetener pick) the AI team can actually afford/use, sized so
+ * the deal is at least fair value for the user (this is meant to read as
+ * "someone wants your guy," not a lowball). Skips entirely if there's
+ * nothing on the block or too many offers are already pending.
+ */
+export async function generateTradeOffers(leagueId: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league || league.userTeamId == null) return
+  const pending = league.pendingTradeOffers ?? []
+  if (pending.length >= 3) return
+
+  const blockPlayers = await db.players
+    .where('teamId')
+    .equals(league.userTeamId)
+    .and((p) => p.onTradeBlock === true)
+    .toArray()
+  if (blockPlayers.length === 0) return
+
+  const rng = createRng(league.season * 104729 + league.week)
+  if (rng() > 0.5) return // not every week produces an offer
+
+  const alreadyOffered = new Set(pending.map((o) => o.requestPlayerIds[0]))
+  const target = blockPlayers.find((p) => !alreadyOffered.has(p.id))
+  if (!target) return
+
+  const teams = await db.teams.toArray()
+  const allTeamIds = teams.map((t) => t.id)
+  const candidateTeamIds = allTeamIds.filter((id) => id !== league.userTeamId)
+  const fromTeamId = candidateTeamIds[Math.floor(rng() * candidateTeamIds.length)]
+  const fromRoster = await db.players.where('teamId').equals(fromTeamId).toArray()
+
+  // "Need" here means either an actual roster shortage at that position, or
+  // the blocked player would just be a clear upgrade over their current
+  // starter there - a healthy 53-man roster rarely has a numeric shortage
+  // (rosterNeeds only fires below the position's target count), but a real
+  // team still wants to trade for a better starter even at a "full" spot.
+  const needs = new Set(rosterNeeds(fromRoster))
+  const currentBestAtPosition = fromRoster
+    .filter((p) => p.position === target.position)
+    .sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+  const wouldUpgrade = !currentBestAtPosition || target.ratings.overall > currentBestAtPosition.ratings.overall + 3
+  if (!needs.has(target.position) && !wouldUpgrade) return
+
+  const targetValue = playerValue(target)
+  const capSpace = computeCapSpace(fromRoster)
+  if ((target.contract?.salary ?? 0) > capSpace) return // can't actually afford the contract
+
+  // Build a "give" package from the offering team's own surplus (positions
+  // they're not short on), aiming to clear the target's value with a
+  // little extra so it reads as a good offer for the user.
+  const fromNeeds = new Set(needs)
+  const surplus = fromRoster
+    .filter((p) => !fromNeeds.has(p.position) && p.ratings.overall < target.ratings.overall + 10)
+    .sort((a, b) => playerValue(b) - playerValue(a))
+
+  const offerPlayers: Player[] = []
+  let offerValue = 0
+  for (const p of surplus) {
+    if (offerValue >= targetValue * 1.1) break
+    offerPlayers.push(p)
+    offerValue += playerValue(p)
+    if (offerPlayers.length >= 2) break
+  }
+
+  let offerPicks: TradePickRef[] = []
+  if (offerValue < targetValue) {
+    const picks = ownedPicks(league.tradedPicks, league.season, allTeamIds, fromTeamId, 3).sort(
+      (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
+    )
+    for (const ref of picks) {
+      const v = pickValue(ref.round, ref.year - league.season)
+      if (offerValue >= targetValue) break
+      offerPicks.push(ref)
+      offerValue += v
+      if (offerPicks.length >= 2) break
+    }
+  }
+
+  if (offerValue < targetValue * 0.9 || (offerPlayers.length === 0 && offerPicks.length === 0)) return
+
+  const offer: PendingTradeOffer = {
+    id: league.nextTradeOfferId ?? 1,
+    fromTeamId,
+    offerPlayerIds: offerPlayers.map((p) => p.id),
+    offerPicks,
+    requestPlayerIds: [target.id],
+    requestPicks: [],
+  }
+
+  await db.leagues.update(leagueId, {
+    pendingTradeOffers: [...pending, offer],
+    nextTradeOfferId: offer.id + 1,
+  })
+}
+
+/**
+ * Accepts a pending AI trade offer exactly as proposed. Unlike proposeTrade
+ * this does NOT re-run evaluateTrade's fairness check from the AI's side -
+ * that check requires the "responding" team to come out ahead, but here the
+ * AI is the one who initiated the offer specifically to overpay for a
+ * player it wants, so the fairness decision was already made at generation
+ * time. Still re-validates the mechanics (players/picks are still owned
+ * where expected, the user's own roster stays under the cap) in case
+ * anything changed since the offer was generated.
+ */
+export async function acceptTradeOffer(leagueId: number, offerId: number): Promise<TradeEvaluation> {
+  const league = await db.leagues.get(leagueId)
+  if (!league || league.userTeamId == null) return { accepted: false, reason: 'League not found' }
+  const offer = (league.pendingTradeOffers ?? []).find((o) => o.id === offerId)
+  if (!offer) return { accepted: false, reason: 'Offer no longer available' }
+
+  const userTeamId = league.userTeamId
+  const rosterUser = await db.players.where('teamId').equals(userTeamId).toArray()
+  const rosterAi = await db.players.where('teamId').equals(offer.fromTeamId).toArray()
+
+  const giving = rosterUser.filter((p) => offer.requestPlayerIds.includes(p.id))
+  const getting = rosterAi.filter((p) => offer.offerPlayerIds.includes(p.id))
+  if (giving.length !== offer.requestPlayerIds.length || getting.length !== offer.offerPlayerIds.length) {
+    await removeTradeOffer(leagueId, offerId)
+    return { accepted: false, reason: 'This offer is no longer valid - a player already moved' }
+  }
+
+  const givePicksResolved = resolvePickRefs(league.tradedPicks, league.season, userTeamId, offer.requestPicks)
+  const getPicksResolved = resolvePickRefs(league.tradedPicks, league.season, offer.fromTeamId, offer.offerPicks)
+  if (!givePicksResolved.valid || !getPicksResolved.valid) {
+    await removeTradeOffer(leagueId, offerId)
+    return { accepted: false, reason: 'This offer is no longer valid - a pick already moved' }
+  }
+
+  if (!wouldFitUnderCap(rosterUser, offer.requestPlayerIds, getting)) {
+    return { accepted: false, reason: 'Would put your team over the salary cap' }
+  }
+
+  await executeTradeMechanics(
+    leagueId,
+    league.tradedPicks,
+    rosterUser,
+    rosterAi,
+    giving,
+    getting,
+    userTeamId,
+    offer.fromTeamId,
+    offer.requestPicks,
+    offer.offerPicks,
+  )
+  await removeTradeOffer(leagueId, offerId)
+
+  return { accepted: true, reason: 'Deal accepted' }
+}
+
+/** Declines/withdraws a pending offer without executing anything. */
+export async function removeTradeOffer(leagueId: number, offerId: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) return
+  await db.leagues.update(leagueId, {
+    pendingTradeOffers: (league.pendingTradeOffers ?? []).filter((o) => o.id !== offerId),
+  })
 }
 
 export interface SeasonHistoryEntry {

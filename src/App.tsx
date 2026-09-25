@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { useMemo, useState } from 'react'
 import { db } from './db'
 import {
+  acceptTradeOffer,
   advanceToFreeAgency,
   beginDraft,
   createLeague,
@@ -14,12 +15,15 @@ import {
   moveDepthChart,
   optimizeDepthChart,
   openFreeAgency,
+  ownedPicks,
   previewLeagueTeams,
   proposeTrade,
+  removeTradeOffer,
   resignPlayer,
   signFreeAgent,
   simRestOfDraft,
   simWeek,
+  toggleTradeBlock,
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
@@ -35,16 +39,19 @@ import { passerRating } from './engine/gameSim'
 import { marketSalary } from './engine/salary'
 import { gradeSeasonPerformance, type SeasonGrade } from './engine/seasonPerformance'
 import { computeConferenceSeeds, computeStandings } from './engine/standings'
+import { pickValue } from './engine/trades'
 import type {
   Conference,
   Division,
   GameResult,
   LeaguePhase,
+  PendingTradeOffer,
   Player,
   PlayerGameStats,
   PlayoffRound,
   Position,
   Team,
+  TradePickRef,
 } from './types'
 
 const GRADE_COLORS: Record<SeasonGrade, string> = {
@@ -589,6 +596,11 @@ function RosterView({
                             {p.injury.description} · {p.injury.weeksRemaining}wk
                           </span>
                         )}
+                        {p.onTradeBlock && (
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-200">
+                            on block
+                          </span>
+                        )}
                       </td>
                       <td className="py-1 px-2 text-right">{p.age}</td>
                       <td className="py-1 px-2 text-right text-green-400 font-semibold">
@@ -608,7 +620,16 @@ function RosterView({
                         {seasonStatLine(p.position, statTotals.get(p.id))}
                       </td>
                       {editable && (
-                        <td className="py-1 pl-4 text-right">
+                        <td className="py-1 pl-4 text-right whitespace-nowrap">
+                          <button
+                            onClick={() => toggleTradeBlock(p.id)}
+                            className={`px-2 py-0.5 border rounded text-[10px] mr-1 ${
+                              p.onTradeBlock ? 'border-blue-600 text-blue-300' : 'text-gray-500'
+                            }`}
+                            title="Flag this player as available in trade talks - AI teams may send offers for blocked players"
+                          >
+                            {p.onTradeBlock ? 'Blocked' : 'Block'}
+                          </button>
                           <button
                             onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
                             disabled={cuttingId === p.id}
@@ -891,8 +912,31 @@ function GameReportView({
   )
 }
 
-function TradeView({ userTeamId }: { userTeamId: number }) {
+const PICK_YEARS_AHEAD = 5
+
+function pickRefKey(r: TradePickRef) {
+  return `${r.year}-${r.round}-${r.originalTeamId}`
+}
+
+/** "2027 R1" normally, or "2027 R1 (via BUF)" when it's someone else's pick a team acquired. */
+function pickLabel(r: TradePickRef, teamId: number, teamAbbrev: (id: number) => string) {
+  const base = `${r.year} R${r.round}`
+  return r.originalTeamId === teamId ? base : `${base} (via ${teamAbbrev(r.originalTeamId)})`
+}
+
+function TradeView({
+  leagueId,
+  userTeamId,
+  season,
+  teamName,
+}: {
+  leagueId: number
+  userTeamId: number
+  season: number
+  teamName: (id: number) => string
+}) {
   const teams = useLiveQuery(() => db.teams.toArray(), [])
+  const league = useLiveQuery(() => db.leagues.get(leagueId), [leagueId])
   const myRoster = useLiveQuery(
     () => db.players.where('teamId').equals(userTeamId).toArray(),
     [userTeamId],
@@ -900,10 +944,13 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
   const [otherTeamId, setOtherTeamId] = useState<number | null>(null)
   const [giveIds, setGiveIds] = useState<Set<number>>(new Set())
   const [getIds, setGetIds] = useState<Set<number>>(new Set())
+  const [givePickKeys, setGivePickKeys] = useState<Set<string>>(new Set())
+  const [getPickKeys, setGetPickKeys] = useState<Set<string>>(new Set())
   const [proposing, setProposing] = useState(false)
   const [result, setResult] = useState<{ accepted: boolean; reason: string } | null>(null)
   const [giveSort, setGiveSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
   const [getSort, setGetSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
+  const [respondingOfferId, setRespondingOfferId] = useState<number | null>(null)
 
   const otherRoster = useLiveQuery(
     (): Promise<Player[]> =>
@@ -911,9 +958,11 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
     [otherTeamId],
   )
 
-  if (!teams || !myRoster) return <p className="text-sm text-gray-500">Loading...</p>
+  if (!teams || !myRoster || !league) return <p className="text-sm text-gray-500">Loading...</p>
 
+  const abbrev = (id: number) => teams.find((t) => t.id === id)?.abbrev ?? `#${id}`
   const otherTeams = teams.filter((t) => t.id !== userTeamId)
+  const allTeamIds = teams.map((t) => t.id)
 
   const toggle = (set: Set<number>, setFn: (s: Set<number>) => void, id: number) => {
     const next = new Set(set)
@@ -921,20 +970,63 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
     else next.add(id)
     setFn(next)
   }
+  const togglePick = (set: Set<string>, setFn: (s: Set<string>) => void, key: string) => {
+    const next = new Set(set)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setFn(next)
+  }
+
+  const myPicks = ownedPicks(league.tradedPicks, season, allTeamIds, userTeamId, PICK_YEARS_AHEAD)
+  const otherPicks =
+    otherTeamId != null ? ownedPicks(league.tradedPicks, season, allTeamIds, otherTeamId, PICK_YEARS_AHEAD) : []
+  const myPickByKey = new Map(myPicks.map((r) => [pickRefKey(r), r]))
+  const otherPickByKey = new Map(otherPicks.map((r) => [pickRefKey(r), r]))
+
+  const giveSalary = myRoster.filter((p) => giveIds.has(p.id)).reduce((s, p) => s + (p.contract?.salary ?? 0), 0)
+  const getSalary = (otherRoster ?? []).filter((p) => getIds.has(p.id)).reduce((s, p) => s + (p.contract?.salary ?? 0), 0)
+  const myCapSpace = computeCapSpace(myRoster)
+  const myCapSpaceAfter = myCapSpace + giveSalary - getSalary
+  const otherCapSpace = otherRoster ? computeCapSpace(otherRoster) : 0
+  const otherCapSpaceAfter = otherCapSpace + getSalary - giveSalary
 
   const handlePropose = async () => {
     if (otherTeamId == null) return
     setProposing(true)
     setResult(null)
     try {
-      const outcome = await proposeTrade(userTeamId, otherTeamId, [...giveIds], [...getIds])
+      const outcome = await proposeTrade(
+        leagueId,
+        userTeamId,
+        otherTeamId,
+        [...giveIds],
+        [...getIds],
+        [...givePickKeys].map((k) => myPickByKey.get(k)).filter((r): r is TradePickRef => r != null),
+        [...getPickKeys].map((k) => otherPickByKey.get(k)).filter((r): r is TradePickRef => r != null),
+      )
       setResult(outcome)
       if (outcome.accepted) {
         setGiveIds(new Set())
         setGetIds(new Set())
+        setGivePickKeys(new Set())
+        setGetPickKeys(new Set())
       }
     } finally {
       setProposing(false)
+    }
+  }
+
+  const handleToggleBlock = async (playerId: number) => {
+    await toggleTradeBlock(playerId)
+  }
+
+  const handleRespondOffer = async (offerId: number, accept: boolean) => {
+    setRespondingOfferId(offerId)
+    try {
+      if (accept) await acceptTradeOffer(leagueId, offerId)
+      else await removeTradeOffer(leagueId, offerId)
+    } finally {
+      setRespondingOfferId(null)
     }
   }
 
@@ -944,6 +1036,7 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
     setFn: (s: Set<number>) => void,
     sort: SortState,
     setSort: (s: SortState) => void,
+    showBlockToggle: boolean,
   ) => (
     <table className="w-full text-sm border-collapse">
       <thead>
@@ -952,6 +1045,8 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
           <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} />
           <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} />
           <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" />
+          <SortHeader label="Salary" sortKey="salary" sort={sort} setSort={setSort} className="text-right" />
+          {showBlockToggle && <th className="py-1 text-right">Block</th>}
         </tr>
       </thead>
       <tbody>
@@ -961,6 +1056,7 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
           (p, key) => {
             if (key === 'name') return `${p.firstName} ${p.lastName}`
             if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
+            if (key === 'salary') return p.contract?.salary ?? 0
             return p.ratings.overall
           },
           (p) => p.ratings.overall,
@@ -975,18 +1071,104 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
             </td>
             <td className="py-1">
               {p.firstName} {p.lastName}
+              {p.onTradeBlock && (
+                <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-200">on block</span>
+              )}
             </td>
             <td className="py-1">{p.position}</td>
             <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+            <td className="py-1 text-right whitespace-nowrap">{p.contract ? formatMoney(p.contract.salary) : '-'}</td>
+            {showBlockToggle && (
+              <td className="py-1 text-right">
+                <button
+                  onClick={() => handleToggleBlock(p.id)}
+                  className={`px-2 py-0.5 border rounded text-[10px] ${
+                    p.onTradeBlock ? 'border-blue-600 text-blue-300' : 'text-gray-500'
+                  }`}
+                >
+                  {p.onTradeBlock ? 'Remove' : 'Add'}
+                </button>
+              </td>
+            )}
           </tr>
         ))}
       </tbody>
     </table>
   )
 
+  const renderPicks = (
+    picks: TradePickRef[],
+    teamId: number,
+    selected: Set<string>,
+    setFn: (s: Set<string>) => void,
+  ) => {
+    if (picks.length === 0) {
+      return <p className="text-xs text-gray-600 mt-2">No picks owned in the next {PICK_YEARS_AHEAD} years.</p>
+    }
+    const byYear = new Map<number, TradePickRef[]>()
+    for (const r of picks) {
+      const list = byYear.get(r.year) ?? []
+      list.push(r)
+      byYear.set(r.year, list)
+    }
+    return (
+      <div className="mt-2 flex flex-col gap-1.5">
+        {[...byYear.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([year, refs]) => (
+            <div key={year} className="flex flex-wrap gap-1 items-center text-xs">
+              <span className="text-gray-500 w-10 shrink-0">{year}</span>
+              {refs
+                .sort((a, b) => a.round - b.round)
+                .map((r) => {
+                  const key = pickRefKey(r)
+                  const checked = selected.has(key)
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => togglePick(selected, setFn, key)}
+                      title={pickLabel(r, teamId, abbrev)}
+                      className={`px-1.5 py-0.5 rounded border ${
+                        checked ? 'border-blue-500 bg-blue-900/50 text-blue-200' : 'border-gray-700 text-gray-400'
+                      }`}
+                    >
+                      R{r.round}
+                      {r.originalTeamId !== teamId && <span className="text-[9px]">*</span>}
+                    </button>
+                  )
+                })}
+            </div>
+          ))}
+        <p className="text-[10px] text-gray-600">* = acquired via a previous trade, not this team's own original pick.</p>
+      </div>
+    )
+  }
+
+  const pendingOffers = league.pendingTradeOffers ?? []
+
   return (
     <div>
-      <p className="text-sm text-gray-500 mb-2 text-left">Trade with</p>
+      {pendingOffers.length > 0 && (
+        <div className="mb-6 border border-blue-800 rounded p-3 bg-blue-950/30">
+          <h3 className="text-sm font-semibold text-blue-300 mb-2">Incoming Trade Offers ({pendingOffers.length})</h3>
+          <div className="flex flex-col gap-2">
+            {pendingOffers.map((offer) => (
+              <TradeOfferRow
+                key={offer.id}
+                offer={offer}
+                teamName={teamName}
+                season={season}
+                responding={respondingOfferId === offer.id}
+                onRespond={(accept) => handleRespondOffer(offer.id, accept)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="text-sm text-gray-500 mb-2 text-left">
+        Trade with &middot; Your cap space: {formatMoney(myCapSpace)}
+      </p>
       <select
         className="border rounded-md px-3 py-2 text-sm mb-4"
         value={otherTeamId ?? ''}
@@ -994,6 +1176,8 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
           setOtherTeamId(e.target.value ? Number(e.target.value) : null)
           setGiveIds(new Set())
           setGetIds(new Set())
+          setGivePickKeys(new Set())
+          setGetPickKeys(new Set())
           setResult(null)
         }}
       >
@@ -1009,18 +1193,38 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
         <>
           <div className="grid grid-cols-2 gap-6 mb-4">
             <div>
-              <h3 className="text-sm font-semibold mb-2">You give ({giveIds.size})</h3>
-              {renderRoster(myRoster, giveIds, setGiveIds, giveSort, setGiveSort)}
+              <h3 className="text-sm font-semibold mb-2">You give ({giveIds.size + givePickKeys.size})</h3>
+              <p className="text-xs mb-2">
+                Your cap space after:{' '}
+                <span className={myCapSpaceAfter < 0 ? 'text-red-400 font-semibold' : 'text-green-400'}>
+                  {formatMoney(myCapSpaceAfter)}
+                </span>
+              </p>
+              {renderRoster(myRoster, giveIds, setGiveIds, giveSort, setGiveSort, true)}
+              <h4 className="text-xs font-semibold text-gray-400 mt-3">Your draft picks</h4>
+              {renderPicks(myPicks, userTeamId, givePickKeys, setGivePickKeys)}
             </div>
             <div>
-              <h3 className="text-sm font-semibold mb-2">You get ({getIds.size})</h3>
-              {renderRoster(otherRoster, getIds, setGetIds, getSort, setGetSort)}
+              <h3 className="text-sm font-semibold mb-2">You get ({getIds.size + getPickKeys.size})</h3>
+              <p className="text-xs mb-2">
+                {teamName(otherTeamId)} cap space after:{' '}
+                <span className={otherCapSpaceAfter < 0 ? 'text-red-400 font-semibold' : 'text-green-400'}>
+                  {formatMoney(otherCapSpaceAfter)}
+                </span>{' '}
+                <span className="text-gray-600">(currently {formatMoney(otherCapSpace)})</span>
+              </p>
+              {renderRoster(otherRoster, getIds, setGetIds, getSort, setGetSort, false)}
+              <h4 className="text-xs font-semibold text-gray-400 mt-3">Their draft picks</h4>
+              {renderPicks(otherPicks, otherTeamId, getPickKeys, setGetPickKeys)}
             </div>
           </div>
 
           <button
             onClick={handlePropose}
-            disabled={proposing || (giveIds.size === 0 && getIds.size === 0)}
+            disabled={
+              proposing ||
+              (giveIds.size === 0 && getIds.size === 0 && givePickKeys.size === 0 && getPickKeys.size === 0)
+            }
             className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50"
           >
             {proposing ? 'Proposing...' : 'Propose Trade'}
@@ -1034,6 +1238,63 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+/** One row in the Incoming Trade Offers panel - what the AI team is sending vs. asking for, with an estimated pick value hint. */
+function TradeOfferRow({
+  offer,
+  teamName,
+  season,
+  responding,
+  onRespond,
+}: {
+  offer: PendingTradeOffer
+  teamName: (id: number) => string
+  season: number
+  responding: boolean
+  onRespond: (accept: boolean) => void
+}) {
+  const offerPlayers = useLiveQuery(
+    (): Promise<Player[]> => db.players.bulkGet(offer.offerPlayerIds).then((ps) => ps.filter((p): p is Player => p != null)),
+    [offer.id],
+  )
+  const requestPlayers = useLiveQuery(
+    (): Promise<Player[]> => db.players.bulkGet(offer.requestPlayerIds).then((ps) => ps.filter((p): p is Player => p != null)),
+    [offer.id],
+  )
+
+  if (!offerPlayers || !requestPlayers) return null
+
+  const pickText = (refs: TradePickRef[]) =>
+    refs.map((r) => `${r.year} R${r.round} pick (trade value ~${Math.round(pickValue(r.round, r.year - season))})`)
+
+  return (
+    <div className="border rounded p-2 flex items-center justify-between gap-3 flex-wrap">
+      <div className="text-sm">
+        <span className="font-semibold">{teamName(offer.fromTeamId)}</span> offers{' '}
+        {[...offerPlayers.map((p) => `${p.firstName} ${p.lastName} (${p.position}, ${p.ratings.overall} OVR)`), ...pickText(offer.offerPicks)].join(
+          ', ',
+        )}{' '}
+        for {[...requestPlayers.map((p) => `${p.firstName} ${p.lastName}`), ...pickText(offer.requestPicks)].join(', ')}
+      </div>
+      <div className="flex gap-2 shrink-0">
+        <button
+          onClick={() => onRespond(true)}
+          disabled={responding}
+          className="px-3 py-1 bg-green-600 text-white rounded text-xs disabled:opacity-50"
+        >
+          Accept
+        </button>
+        <button
+          onClick={() => onRespond(false)}
+          disabled={responding}
+          className="px-3 py-1 border rounded text-xs disabled:opacity-50"
+        >
+          Decline
+        </button>
+      </div>
     </div>
   )
 }
@@ -2218,7 +2479,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
               teamName={teamName}
             />
           )}
-          {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
+          {tab === 'trade' && league.userTeamId != null && (
+            <TradeView leagueId={leagueId} userTeamId={league.userTeamId} season={league.season} teamName={teamName} />
+          )}
           {tab === 'freeagents' && league.userTeamId != null && (
             <FreeAgencyView
               leagueId={leagueId}

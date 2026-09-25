@@ -1,24 +1,29 @@
 import 'fake-indexeddb/auto'
 import { db } from '../src/db'
 import {
+  acceptTradeOffer,
   advanceToFreeAgency,
   beginDraft,
   createLeague,
   cutPlayer,
   deleteLeague,
   DRAFT_ROUNDS,
+  generateTradeOffers,
   getDraftBoard,
   getSeasonHistory,
   makeUserDraftPick,
   moveDepthChart,
   optimizeDepthChart,
   openFreeAgency,
+  ownedPicks,
+  pickOwner,
   previewLeagueTeams,
   proposeTrade,
   resignPlayer,
   signFreeAgent,
   simRestOfDraft,
   simWeek,
+  toggleTradeBlock,
 } from '../src/engine/league'
 import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
@@ -386,7 +391,7 @@ async function main() {
 
     const myWorst = [...myRoster].sort((a, b) => a.ratings.overall - b.ratings.overall)[0]
     const theirBest = [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
-    const badTrade = await proposeTrade(startLeague.userTeamId!, otherTeam.id, [myWorst.id], [theirBest.id])
+    const badTrade = await proposeTrade(leagueId, startLeague.userTeamId!, otherTeam.id, [myWorst.id], [theirBest.id])
     if (badTrade.accepted) throw new Error('AI accepted a lopsided trade in the user\'s favor')
 
     // Trades now require the responding team (otherTeam, giving up `theirs`
@@ -409,6 +414,7 @@ async function main() {
     if (!closest) throw new Error('No comparable same-position players found to test trades with')
 
     const fairTrade = await proposeTrade(
+      leagueId,
       startLeague.userTeamId!,
       otherTeam.id,
       [closest.mine.id],
@@ -423,6 +429,92 @@ async function main() {
       throw new Error('Accepted trade did not actually swap player teamIds')
     }
     console.log('OK: trade evaluation and execution work (rejects lopsided, accepts fair, swaps rosters)')
+  })()
+
+  await (async () => {
+    // Draft pick trading: give up a future 1st, get back a future 3rd plus
+    // enough extra pick value to clear evaluateTrade's bar, then confirm
+    // ownership actually moved and the draft later respects it (the team
+    // that received the 1st should be the one on the clock for it).
+    const startLeague = (await db.leagues.get(leagueId))!
+    const teams = await db.teams.toArray()
+    const userTeamId = startLeague.userTeamId!
+    const otherTeam = teams.find((t) => t.id !== userTeamId)!
+    const allTeamIds = teams.map((t) => t.id)
+
+    const myOwnedPicks = ownedPicks(startLeague.tradedPicks, startLeague.season, allTeamIds, userTeamId, 5)
+    const myFirstRounder = myOwnedPicks.find((p) => p.round === 1 && p.originalTeamId === userTeamId)
+    if (!myFirstRounder) throw new Error('Expected the user to own their own future 1st-round pick before any trades')
+
+    const theirOwnedPicks = ownedPicks(startLeague.tradedPicks, startLeague.season, allTeamIds, otherTeam.id, 5)
+    const theirLateRounders = theirOwnedPicks.filter((p) => p.round >= 5 && p.originalTeamId === otherTeam.id)
+    if (theirLateRounders.length < 3) throw new Error('Expected the other team to own at least 3 late-round picks to test with')
+
+    const pickTrade = await proposeTrade(
+      leagueId,
+      userTeamId,
+      otherTeam.id,
+      [],
+      [],
+      [myFirstRounder],
+      theirLateRounders.slice(0, 3),
+    )
+    if (!pickTrade.accepted) {
+      throw new Error(`Expected a 1st-round pick for three Day 3 picks to be accepted, got: ${pickTrade.reason}`)
+    }
+
+    const leagueAfterPickTrade = await db.leagues.get(leagueId)
+    const newOwner = pickOwner(leagueAfterPickTrade!.tradedPicks, myFirstRounder.year, myFirstRounder.round, myFirstRounder.originalTeamId)
+    if (newOwner !== otherTeam.id) {
+      throw new Error(`Expected ${otherTeam.id} to now own the traded 1st-rounder, owner is ${newOwner}`)
+    }
+    const receivedBack = theirLateRounders
+      .slice(0, 3)
+      .every((ref) => pickOwner(leagueAfterPickTrade!.tradedPicks, ref.year, ref.round, ref.originalTeamId) === userTeamId)
+    if (!receivedBack) throw new Error('Expected the user to now own the three late-round picks received back')
+    console.log('OK: draft pick trading moves ownership correctly and is folded into trade value')
+  })()
+
+  await (async () => {
+    // Trade block: flag a player, force-generate an AI offer for them, and
+    // accept it - confirms the whole offer pipeline (generation, display
+    // data, acceptance) works end to end.
+    const startLeague = (await db.leagues.get(leagueId))!
+    const userTeamId = startLeague.userTeamId!
+    const myRoster = await db.players.where('teamId').equals(userTeamId).toArray()
+    const blockTarget = [...myRoster].sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+    await toggleTradeBlock(blockTarget.id)
+    const blocked = await db.players.get(blockTarget.id)
+    if (!blocked?.onTradeBlock) throw new Error('toggleTradeBlock did not flag the player')
+
+    // generateTradeOffers only fires ~50% of weeks and needs a team with a
+    // real need at the blocked position - retry a handful of times, varying
+    // the week to get different rng draws/team picks, then restore the real
+    // week afterward (this runs before playSeason - nothing has consumed
+    // the schedule yet, so bumping week here must not leak into the actual
+    // season sim below).
+    const originalWeek = startLeague.week
+    let offer = null
+    for (let i = 0; i < 20 && !offer; i++) {
+      await db.leagues.update(leagueId, { week: originalWeek + i })
+      await generateTradeOffers(leagueId)
+      const withOffers = await db.leagues.get(leagueId)
+      offer = (withOffers?.pendingTradeOffers ?? [])[0] ?? null
+    }
+    await db.leagues.update(leagueId, { week: originalWeek })
+    if (!offer) {
+      console.log('OK: no AI trade offer materialized in 20 tries (position/cap/need mismatch) - skipping accept check')
+    } else {
+      const acceptResult = await acceptTradeOffer(leagueId, offer.id)
+      if (!acceptResult.accepted) throw new Error(`Expected the pre-vetted AI offer to be accepted, got: ${acceptResult.reason}`)
+      const tradedAway = await db.players.get(blockTarget.id)
+      if (tradedAway?.teamId === userTeamId) throw new Error('Accepting the trade offer did not move the blocked player off the user team')
+      const leagueAfterAccept = await db.leagues.get(leagueId)
+      if ((leagueAfterAccept?.pendingTradeOffers ?? []).some((o) => o.id === offer.id)) {
+        throw new Error('Accepted offer is still listed as pending')
+      }
+      console.log('OK: AI trade offer generated for a blocked player and accepted correctly')
+    }
   })()
 
   await playSeason(leagueId)

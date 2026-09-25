@@ -31,6 +31,28 @@ export function playerValue(p: Player): number {
   return Math.max(0, value)
 }
 
+/**
+ * A future draft pick's value on the same scale as playerValue: a real
+ * first-rounder is worth roughly what a solid young starter is (there's a
+ * real chance it becomes one), tapering off fast round to round, and
+ * discounted the further out it is (a pick 4 years away is a lot less
+ * certain than next year's). Round is 1-7; yearsOut is 1 for next year's
+ * draft, 2 for the year after, etc.
+ */
+export function pickValue(round: number, yearsOut: number): number {
+  const baseByRound: Record<number, number> = {
+    1: 3200,
+    2: 1500,
+    3: 800,
+    4: 400,
+    5: 200,
+    6: 100,
+    7: 50,
+  }
+  const base = baseByRound[round] ?? 50
+  return base * Math.pow(0.8, Math.max(0, yearsOut - 1))
+}
+
 export interface TradeEvaluation {
   accepted: boolean
   reason: string
@@ -38,19 +60,24 @@ export interface TradeEvaluation {
 
 /**
  * Evaluates a proposed trade from the responding team's (`theirRoster`)
- * point of view: they'd be sending away `leaving` and receiving `entering`.
- * Accepts if the value they receive is at least ~90% of what they give up
- * (a little slack so trades aren't impossibly hard to make) and the deal
- * doesn't leave their roster dangerously short at any position or over the
- * salary cap.
+ * point of view: they'd be sending away `leaving` (players) and receiving
+ * `entering` (players), plus any draft-pick value on each side folded into
+ * the same comparison via `extraValueLeaving`/`extraValueEntering`. Accepts
+ * if the value they receive is at least ~90% of what they give up (a little
+ * slack so trades aren't impossibly hard to make) and the deal doesn't
+ * leave their roster dangerously short at any position or over the salary
+ * cap. Picks don't affect the roster-shape/cap checks below - only rostered
+ * players do.
  */
 export function evaluateTrade(
   theirRoster: Player[],
   leaving: Player[],
   entering: Player[],
+  extraValueLeaving = 0,
+  extraValueEntering = 0,
 ): TradeEvaluation {
-  const valueLeaving = leaving.reduce((sum, p) => sum + playerValue(p), 0)
-  const valueEntering = entering.reduce((sum, p) => sum + playerValue(p), 0)
+  const valueLeaving = leaving.reduce((sum, p) => sum + playerValue(p), 0) + extraValueLeaving
+  const valueEntering = entering.reduce((sum, p) => sum + playerValue(p), 0) + extraValueEntering
 
   // The better the best player they're giving up, the less willing a real
   // team is to do it without a genuinely comparable piece coming back -

@@ -57,6 +57,9 @@ export interface Player {
   // one or an actual rating drop) and isn't shown directly.
   trend?: 'up' | 'down' | null
   badStreak?: number
+  // Flagged by the user as available in trade talks - AI teams periodically
+  // shop offers for blocked players (see generateTradeOffers).
+  onTradeBlock?: boolean
 }
 
 export type Conference = 'AFC' | 'NFC'
@@ -142,6 +145,37 @@ export interface DraftPickLogEntry {
   prospectIndex: number
 }
 
+/**
+ * A future draft pick is identified by which season's draft it belongs to,
+ * which round, and which team's original slot it is (a team's own round-3
+ * pick is always "their" round-3 slot regardless of how many times it's
+ * been traded since - `ownerTeamId` is the only thing that changes hands).
+ */
+export interface TradedPick {
+  year: number
+  round: number
+  originalTeamId: number
+  ownerTeamId: number
+}
+
+export interface TradePickRef {
+  year: number
+  round: number
+  originalTeamId: number
+}
+
+/** An AI-initiated trade offer for one of the user's trade-block players, waiting on a response. */
+export interface PendingTradeOffer {
+  id: number
+  fromTeamId: number
+  // What the AI team is offering to send the user.
+  offerPlayerIds: number[]
+  offerPicks: TradePickRef[]
+  // What the AI team wants back from the user.
+  requestPlayerIds: number[]
+  requestPicks: TradePickRef[]
+}
+
 export interface League {
   id: number
   name: string
@@ -162,4 +196,9 @@ export interface League {
   draftOrderIndex?: number
   draftPickedIndices?: number[]
   draftLog?: DraftPickLogEntry[]
+  // Only picks that have actually changed hands are stored - a pick with
+  // no entry here still belongs to its original team.
+  tradedPicks?: TradedPick[]
+  pendingTradeOffers?: PendingTradeOffer[]
+  nextTradeOfferId?: number
 }
