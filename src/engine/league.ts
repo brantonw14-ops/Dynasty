@@ -1,9 +1,9 @@
 import { db } from '../db'
-import type { Conference, GameResult, Player, PlayoffRound, Team } from '../types'
+import type { Conference, Division, GameResult, Player, PlayoffRound, Team } from '../types'
 import { runDraft } from './draft'
 import { computeCapSpace, expireContracts, runFreeAgency } from './freeAgency'
 import { simGame } from './gameSim'
-import { generateRosterForTeam, rosterNeeds } from './players'
+import { classifyTeamOutlook, generateRosterForTeam, rosterNeeds, type TeamOutlook } from './players'
 import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
@@ -11,6 +11,51 @@ import { generateSchedule } from './schedule'
 import { computeConferenceSeeds, computeStandings, type PlayoffSeed } from './standings'
 import { generateTeams, SALARY_CAP } from './teams'
 import { evaluateTrade, type TradeEvaluation } from './trades'
+
+export interface TeamPreview {
+  index: number
+  region: string
+  name: string
+  abbrev: string
+  conference: Conference
+  division: Division
+  overall: number
+  avgAge: number
+  capSpace: number
+  outlook: TeamOutlook
+}
+
+/**
+ * Generates the same 32 team rosters createLeague would for this seed,
+ * purely in memory (no DB writes), so the team picker can show accurate
+ * overall/cap/outlook before the user commits to a league. Passing the
+ * same seed into createLeague afterward reproduces this exactly - the
+ * generation order (team list, then roster-per-team) and RNG consumption
+ * are identical either way, so the preview never lies about what you get.
+ */
+export function previewLeagueTeams(seed: number): TeamPreview[] {
+  const rng = createRng(seed)
+  const drafts = generateTeams()
+  return drafts.map((d, i) => {
+    const roster = generateRosterForTeam(rng, i) as Player[]
+    const overall = Math.round(roster.reduce((sum, p) => sum + p.ratings.overall, 0) / roster.length)
+    const avgAge =
+      Math.round((roster.reduce((sum, p) => sum + p.age, 0) / roster.length) * 10) / 10
+    const capSpace = SALARY_CAP - roster.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
+    return {
+      index: i,
+      region: d.region,
+      name: d.name,
+      abbrev: d.abbrev,
+      conference: d.conference,
+      division: d.division,
+      overall,
+      avgAge,
+      capSpace,
+      outlook: classifyTeamOutlook(roster),
+    }
+  })
+}
 
 export async function createLeague(name: string, userTeamIndex: number, seed = Date.now()) {
   const rng = createRng(seed)

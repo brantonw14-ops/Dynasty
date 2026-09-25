@@ -4,6 +4,7 @@ import {
   advanceToFreeAgency,
   createLeague,
   deleteLeague,
+  previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
   signFreeAgent,
@@ -89,11 +90,51 @@ async function assertSeasonSane(leagueId: number, season: number) {
 }
 
 async function main() {
-  const leagueId = await createLeague('Smoke Test League', 0, 42)
+  const seed = 42
+
+  await (async () => {
+    const previews = previewLeagueTeams(seed)
+    if (previews.length !== 32) throw new Error('Expected 32 team previews')
+    const outlooks = new Set(previews.map((p) => p.outlook))
+    console.log(
+      'team preview outlooks:',
+      Object.fromEntries([...outlooks].map((o) => [o, previews.filter((p) => p.outlook === o).length])),
+    )
+    if (outlooks.size < 2) throw new Error('Expected teams to vary in outlook, not all identical')
+    for (const p of previews) {
+      if (p.capSpace < 0) throw new Error(`Preview team ${p.abbrev} starts over the salary cap`)
+    }
+    console.log('OK: team previews vary and none start over the cap')
+  })()
+
+  const leagueId = await createLeague('Smoke Test League', 0, seed)
 
   const teamCount = await db.teams.count()
   console.log('teams:', teamCount, '(expected 32)')
   if (teamCount !== 32) throw new Error('Expected 32 NFL teams')
+
+  await (async () => {
+    const previews = previewLeagueTeams(seed)
+    const teams = await db.teams.toArray()
+    for (let i = 0; i < previews.length; i++) {
+      const preview = previews[i]
+      const team = teams[i]
+      const roster = await db.players.where('teamId').equals(team.id).toArray()
+      const actualOverall = Math.round(roster.reduce((s, p) => s + p.ratings.overall, 0) / roster.length)
+      const actualCap = 224_000_000 - roster.reduce((s, p) => s + (p.contract?.salary ?? 0), 0)
+      if (actualOverall !== preview.overall) {
+        throw new Error(
+          `Preview overall (${preview.overall}) for ${preview.abbrev} doesn't match actual (${actualOverall})`,
+        )
+      }
+      if (Math.abs(actualCap - preview.capSpace) > 1) {
+        throw new Error(
+          `Preview cap space (${preview.capSpace}) for ${preview.abbrev} doesn't match actual (${actualCap})`,
+        )
+      }
+    }
+    console.log('OK: team preview exactly matches actual generated rosters for the same seed')
+  })()
 
   await (async () => {
     const allPlayers = await db.players.toArray()

@@ -1,20 +1,32 @@
 import { useLiveQuery } from 'dexie-react-hooks'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { db } from './db'
 import {
   advanceToFreeAgency,
   createLeague,
   deleteLeague,
+  previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
   signFreeAgent,
   simWeek,
+  type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
 import { rosterNeeds } from './engine/players'
 import { computeStandings } from './engine/standings'
-import { TEAM_PREVIEWS } from './engine/teams'
 import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
+
+const OUTLOOK_LABELS: Record<TeamPreview['outlook'], string> = {
+  rebuilding: 'Rebuilding',
+  contender: 'Playoff Contender',
+  superbowl: 'Super Bowl Worthy',
+}
+const OUTLOOK_STYLES: Record<TeamPreview['outlook'], string> = {
+  rebuilding: 'bg-gray-100 text-gray-600',
+  contender: 'bg-blue-100 text-blue-700',
+  superbowl: 'bg-amber-100 text-amber-800',
+}
 
 const POSITION_ORDER: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
 const CONFERENCES: Conference[] = ['AFC', 'NFC']
@@ -595,21 +607,27 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
 
 function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
   const [name, setName] = useState('My Dynasty')
-  const [teamIndex, setTeamIndex] = useState(0)
+  const [teamIndex, setTeamIndex] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
+  const [seed, setSeed] = useState(() => Date.now())
+
+  const previews = useMemo(() => previewLeagueTeams(seed), [seed])
 
   const handleCreate = async () => {
+    if (teamIndex == null) return
     setCreating(true)
     try {
-      const id = await createLeague(name, teamIndex)
+      const id = await createLeague(name, teamIndex, seed)
       onCreated(id)
     } finally {
       setCreating(false)
     }
   }
 
+  const selected = teamIndex != null ? previews[teamIndex] : null
+
   return (
-    <div className="max-w-2xl mx-auto p-8 text-center">
+    <div className="max-w-3xl mx-auto p-8 text-center">
       <h1 className="text-2xl font-semibold mb-4">Dynasty</h1>
       <input
         className="border rounded-md px-3 py-2 w-full mb-3"
@@ -618,39 +636,71 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
         placeholder="League name"
       />
 
-      <p className="text-sm text-gray-500 mb-2 text-left">Pick your team</p>
-      <div className="max-h-80 overflow-y-auto border rounded-md p-3 mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm text-gray-500 text-left">
+          Pick your team - every team starts at a different point (age, talent, cap space).
+        </p>
+        <button
+          onClick={() => {
+            setSeed(Date.now())
+            setTeamIndex(null)
+          }}
+          className="text-xs text-blue-600 underline shrink-0 ml-2"
+        >
+          Reroll league
+        </button>
+      </div>
+
+      <div className="max-h-96 overflow-y-auto border rounded-md p-3 mb-4">
         {CONFERENCES.map((conf) => (
           <div key={conf} className="mb-3 last:mb-0">
             <h3 className="text-xs font-semibold text-gray-500 mb-1 text-left">{conf}</h3>
             <div className="grid grid-cols-2 gap-2">
-              {TEAM_PREVIEWS.map((t, i) =>
-                t.conference === conf ? (
+              {previews
+                .filter((t) => t.conference === conf)
+                .map((t) => (
                   <button
                     key={t.abbrev}
-                    onClick={() => setTeamIndex(i)}
+                    onClick={() => setTeamIndex(t.index)}
                     className={`border rounded-md px-3 py-2 text-sm text-left ${
-                      teamIndex === i ? 'border-blue-600 ring-1 ring-blue-600' : ''
+                      teamIndex === t.index ? 'border-blue-600 ring-1 ring-blue-600' : ''
                     }`}
                   >
-                    {t.region} {t.name}
-                    <span className="block text-xs text-gray-500">
-                      {t.conference} {t.division}
+                    <div className="flex items-center justify-between gap-2">
+                      <span>
+                        {t.region} {t.name}
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${OUTLOOK_STYLES[t.outlook]}`}
+                      >
+                        {OUTLOOK_LABELS[t.outlook]}
+                      </span>
+                    </div>
+                    <span className="block text-xs text-gray-500 mt-1">
+                      {t.conference} {t.division} &middot; {t.overall} OVR &middot; Age{' '}
+                      {t.avgAge} &middot; {formatMoney(t.capSpace)} cap space
                     </span>
                   </button>
-                ) : null,
-              )}
+                ))}
             </div>
           </div>
         ))}
       </div>
 
+      {selected && (
+        <p className="text-sm text-gray-600 mb-3">
+          {selected.region} {selected.name}: {OUTLOOK_LABELS[selected.outlook]} &middot;{' '}
+          {selected.overall} team overall &middot; {formatMoney(selected.capSpace)} available to
+          spend
+        </p>
+      )}
+
       <button
         onClick={handleCreate}
-        disabled={creating}
+        disabled={creating || teamIndex == null}
         className="px-4 py-2 bg-blue-600 text-white rounded-md w-full disabled:opacity-50"
       >
-        {creating ? 'Creating league...' : 'Start New League'}
+        {creating ? 'Creating league...' : teamIndex == null ? 'Pick a team first' : 'Start New League'}
       </button>
     </div>
   )

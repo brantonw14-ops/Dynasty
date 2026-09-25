@@ -1,6 +1,7 @@
 import type { Player, Position, Ratings } from '../types'
 import { randomName } from './names'
 import { randInt, randNormal, type Rng } from './rng'
+import { SALARY_CAP } from './teams'
 
 const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
 
@@ -28,10 +29,10 @@ function clamp(n: number, min = 40, max = 99) {
   return Math.max(min, Math.min(max, Math.round(n)))
 }
 
-function generateRatings(rng: Rng): Ratings {
+function generateRatings(rng: Rng, ratingOffset = 0): Ratings {
   // Mean shifted up from the old 60 so a 55 floor doesn't pile up too much
   // of the distribution right at the minimum.
-  const base = randNormal(rng, 68, 12)
+  const base = randNormal(rng, 68 + ratingOffset, 12)
   const overall = clamp(base, MIN_OVERALL, 99)
   // Potential is a ceiling, so it can never be below the player's own overall.
   const potential = clamp(overall + Math.abs(randNormal(rng, 8, 6)), overall, 99)
@@ -53,15 +54,44 @@ function generateRatings(rng: Rng): Ratings {
  * makes free agency and trades actually possible instead of instantly
  * cap-blocked.
  */
-function generateContractSalary(rng: Rng, overall: number) {
+function generateContractSalary(rng: Rng, overall: number, spendFactor = 1) {
   const base = 450_000 + Math.max(0, overall - MIN_OVERALL) * 170_000
-  return Math.round(base * (0.8 + rng() * 0.4))
+  return Math.round(base * (0.8 + rng() * 0.4) * spendFactor)
 }
 
-export function generatePlayer(rng: Rng, position: Position, teamId: number | null): Omit<Player, 'id'> {
+/**
+ * Real NFL teams don't start each year dead even - some are stacked
+ * contenders, some are rebuilding. A team's strength is one random draw
+ * (not per-player) so it consistently shapes the whole roster: better
+ * teams skew a bit older (proven vets) and spend more of their cap on
+ * talent; rebuilding teams skew younger (developing) with cheaper deals
+ * and more space left over.
+ */
+export interface TeamStrength {
+  ratingOffset: number
+  ageOffset: number
+  spendFactor: number
+}
+
+export function generateTeamStrength(rng: Rng): TeamStrength {
+  // Roughly a z-score: most teams cluster near 0, a handful sit at the extremes.
+  const skill = randNormal(rng, 0, 1)
+  return {
+    ratingOffset: skill * 6,
+    ageOffset: skill * 1.5,
+    spendFactor: 1 + skill * 0.12,
+  }
+}
+
+export function generatePlayer(
+  rng: Rng,
+  position: Position,
+  teamId: number | null,
+  strength?: TeamStrength,
+): Omit<Player, 'id'> {
   const { firstName, lastName } = randomName(rng)
-  const age = randInt(rng, 21, 33)
-  const ratings = generateRatings(rng)
+  const age = clamp(randInt(rng, 21, 33) + Math.round(strength?.ageOffset ?? 0), 21, 38)
+  const ratings = generateRatings(rng, strength?.ratingOffset ?? 0)
   return {
     firstName,
     lastName,
@@ -72,18 +102,45 @@ export function generatePlayer(rng: Rng, position: Position, teamId: number | nu
     contract:
       teamId === null
         ? null
-        : { salary: generateContractSalary(rng, ratings.overall), yearsLeft: randInt(rng, 1, 4) },
+        : {
+            salary: generateContractSalary(rng, ratings.overall, strength?.spendFactor ?? 1),
+            yearsLeft: randInt(rng, 1, 4),
+          },
     retired: false,
   }
 }
 
 export function generateRosterForTeam(rng: Rng, teamId: number): Omit<Player, 'id'>[] {
+  const strength = generateTeamStrength(rng)
   const players: Omit<Player, 'id'>[] = []
   for (const pos of POSITIONS) {
     const count = ROSTER_SHAPE[pos]
     for (let i = 0; i < count; i++) {
-      players.push(generatePlayer(rng, pos, teamId))
+      players.push(generatePlayer(rng, pos, teamId, strength))
     }
   }
+
+  // Real rosters are never allowed over the cap. A high skill+spend roll can
+  // combine to push a stacked team over it, so scale every contract down
+  // proportionally if needed - always leaves at least ~8% cap space, and
+  // keeps each player's salary relative to their teammates' unchanged.
+  const totalSalary = players.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
+  const maxSpend = SALARY_CAP * 0.92
+  if (totalSalary > maxSpend) {
+    const scale = maxSpend / totalSalary
+    for (const p of players) {
+      if (p.contract) p.contract.salary = Math.round(p.contract.salary * scale)
+    }
+  }
+
   return players
+}
+
+export type TeamOutlook = 'rebuilding' | 'contender' | 'superbowl'
+
+export function classifyTeamOutlook(roster: { ratings: { overall: number } }[]): TeamOutlook {
+  const avgOverall = roster.reduce((sum, p) => sum + p.ratings.overall, 0) / roster.length
+  if (avgOverall >= 73) return 'superbowl'
+  if (avgOverall >= 68) return 'contender'
+  return 'rebuilding'
 }
