@@ -4,6 +4,7 @@ import {
   advanceToFreeAgency,
   createLeague,
   deleteLeague,
+  getSeasonHistory,
   previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
@@ -226,6 +227,15 @@ async function main() {
   if (league.champTeamId == null) throw new Error('No champion set')
   await assertSeasonSane(leagueId, league.season)
 
+  const historyAfterSeason1 = await getSeasonHistory(leagueId)
+  if (historyAfterSeason1.length !== 1) {
+    throw new Error(`Expected 1 season in history, got ${historyAfterSeason1.length}`)
+  }
+  if (historyAfterSeason1[0].champTeamId !== league.champTeamId) {
+    throw new Error('getSeasonHistory champion does not match league.champTeamId')
+  }
+  console.log('OK: season history matches champion after season 1')
+
   console.log('OK: season 1 smoke test passed')
 
   const ratingsBefore = new Map(
@@ -302,6 +312,18 @@ async function main() {
   const league2 = await db.leagues.get(leagueId)
   if (league2?.phase !== 'complete') throw new Error('Second season did not complete')
   await assertSeasonSane(leagueId, leagueAfterOffseason.season)
+
+  const historyAfterSeason2 = await getSeasonHistory(leagueId)
+  if (historyAfterSeason2.length !== 2) {
+    throw new Error(`Expected 2 seasons in history, got ${historyAfterSeason2.length}`)
+  }
+  if (historyAfterSeason2[0].season <= historyAfterSeason2[1].season) {
+    throw new Error('Season history is not sorted newest-first')
+  }
+  if (historyAfterSeason2[0].champTeamId !== league2.champTeamId) {
+    throw new Error('Latest season history entry does not match current champTeamId')
+  }
+  console.log('OK: season history accumulates across seasons, newest first')
 
   console.log('OK: multi-season smoke test passed')
 

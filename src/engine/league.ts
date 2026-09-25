@@ -493,3 +493,34 @@ export async function proposeTrade(
 
   return evaluation
 }
+
+export interface SeasonHistoryEntry {
+  season: number
+  champTeamId: number
+  runnerUpTeamId: number
+  champScore: number
+  runnerUpScore: number
+}
+
+/**
+ * Derived entirely from stored games - no separate history table needed.
+ * Every completed season leaves exactly one 'superbowl' game behind, which
+ * is enough to reconstruct who won it and who they beat.
+ */
+export async function getSeasonHistory(leagueId: number): Promise<SeasonHistoryEntry[]> {
+  const superbowls = await db.games
+    .where('leagueId')
+    .equals(leagueId)
+    .and((g) => g.round === 'superbowl')
+    .toArray()
+
+  return superbowls
+    .map((g) => {
+      const champTeamId = winnerOf(g)
+      const runnerUpTeamId = champTeamId === g.homeTeamId ? g.awayTeamId : g.homeTeamId
+      const champScore = champTeamId === g.homeTeamId ? g.homeScore : g.awayScore
+      const runnerUpScore = champTeamId === g.homeTeamId ? g.awayScore : g.homeScore
+      return { season: g.season, champTeamId, runnerUpTeamId, champScore, runnerUpScore }
+    })
+    .sort((a, b) => b.season - a.season)
+}

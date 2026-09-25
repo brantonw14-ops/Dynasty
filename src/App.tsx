@@ -5,6 +5,7 @@ import {
   advanceToFreeAgency,
   createLeague,
   deleteLeague,
+  getSeasonHistory,
   previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
@@ -290,6 +291,63 @@ interface StatLeaderRow {
   playerId: number
   value: number
   extra?: number
+}
+
+function HistoryView({
+  leagueId,
+  userTeamId,
+  teamName,
+}: {
+  leagueId: number
+  userTeamId: number | null
+  teamName: (id: number) => string
+}) {
+  const history = useLiveQuery(() => getSeasonHistory(leagueId), [leagueId])
+
+  if (!history) return <p className="text-sm text-gray-500">Loading history...</p>
+
+  if (history.length === 0) {
+    return <p className="text-sm text-gray-500">No seasons completed yet.</p>
+  }
+
+  return (
+    <div>
+      <h2 className="text-lg font-medium mb-2">League History</h2>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="text-left text-gray-400 border-b">
+            <th className="py-1">Season</th>
+            <th className="py-1">Champion</th>
+            <th className="py-1">Runner-up</th>
+            <th className="py-1 text-right">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          {history.map((h) => (
+            <tr
+              key={h.season}
+              className={`border-b ${
+                userRowClass(h.champTeamId, userTeamId) || userRowClass(h.runnerUpTeamId, userTeamId)
+              }`}
+            >
+              <td className="py-1 pl-1">{h.season}</td>
+              <td className="py-1">
+                🏆 {teamName(h.champTeamId)}
+                {h.champTeamId === userTeamId && <span className="text-xs text-blue-600"> (you)</span>}
+              </td>
+              <td className="py-1">
+                {teamName(h.runnerUpTeamId)}
+                {h.runnerUpTeamId === userTeamId && <span className="text-xs text-blue-600"> (you)</span>}
+              </td>
+              <td className="py-1 text-right">
+                {h.champScore}-{h.runnerUpScore}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 function StatsLeadersView({ leagueId, season }: { leagueId: number; season: number }) {
@@ -634,7 +692,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advancing, setAdvancing] = useState(false)
-  const [tab, setTab] = useState<'league' | 'roster' | 'trade' | 'stats'>('league')
+  const [tab, setTab] = useState<'league' | 'roster' | 'trade' | 'stats' | 'history'>('league')
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -782,6 +840,14 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             >
               Stat Leaders
             </button>
+            <button
+              onClick={() => setTab('history')}
+              className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                tab === 'history' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+              }`}
+            >
+              History
+            </button>
           </div>
 
           {tab === 'roster' && league.userTeamId != null && (
@@ -789,6 +855,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
           )}
           {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
           {tab === 'stats' && <StatsLeadersView leagueId={leagueId} season={league.season} />}
+          {tab === 'history' && (
+            <HistoryView leagueId={leagueId} userTeamId={league.userTeamId} teamName={teamName} />
+          )}
 
           {tab === 'league' && (
             <>
