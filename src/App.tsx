@@ -891,7 +891,7 @@ function ResignView({
     if (key === 'age') return p.age
     if (key === 'pot') return p.ratings.potential
     if (key === 'grade') return grades.get(p.id) ?? ''
-    if (key === 'salary') return p.contract?.salary ?? -1
+    if (key === 'salary') return p.contract?.salary ?? marketSalary(p.position, p.ratings.overall, p.age)
     if (key === 'yrs') return p.contract?.yearsLeft ?? -1
     return p.ratings.overall
   })
@@ -931,7 +931,7 @@ function ResignView({
             <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="px-2 text-right" />
             <SortHeader label="Grade" sortKey="grade" sort={sort} setSort={setSort} className="px-2 text-right" />
             <th className="py-1 pl-6 text-left">Last Season</th>
-            <SortHeader label="Salary" sortKey="salary" sort={sort} setSort={setSort} className="pl-4 pr-2 text-right" />
+            <SortHeader label="Salary/Asking" sortKey="salary" sort={sort} setSort={setSort} className="pl-4 pr-2 text-right" />
             <SortHeader label="Yrs Left" sortKey="yrs" sort={sort} setSort={setSort} className="px-2 text-right" />
             <th className="py-1 pl-4"></th>
           </tr>
@@ -961,7 +961,13 @@ function ResignView({
                   {statTotals.has(p.id) ? statTotals.get(p.id) : '-'}
                 </td>
                 <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
-                  {p.contract ? formatMoney(p.contract.salary) : '-'}
+                  {p.contract ? (
+                    formatMoney(p.contract.salary)
+                  ) : (
+                    <span className="text-amber-300" title="Estimated asking price to resign">
+                      ~{formatMoney(estSalary)}
+                    </span>
+                  )}
                 </td>
                 <td className="py-1 px-2 text-right">{p.contract?.yearsLeft ?? '-'}</td>
                 <td className="py-1 pl-4">
