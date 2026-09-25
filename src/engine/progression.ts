@@ -1,4 +1,5 @@
-import type { Player, Ratings } from '../types'
+import type { Player, Position, Ratings } from '../types'
+import { AGE_DECLINE_EXEMPT_POSITIONS } from './players'
 import { randNormal, type Rng } from './rng'
 
 function clamp(n: number, min = 40, max = 99) {
@@ -13,7 +14,7 @@ function clamp(n: number, min = 40, max = 99) {
  * recomputed from them - it stays solely a function of those three,
  * consistent with how it's generated.
  */
-export function progressRatings(rng: Rng, ratings: Ratings, ageAfterBirthday: number): Ratings {
+export function progressRatings(rng: Rng, position: Position, ratings: Ratings, ageAfterBirthday: number): Ratings {
   let delta: number
 
   if (ageAfterBirthday <= 26) {
@@ -34,9 +35,23 @@ export function progressRatings(rng: Rng, ratings: Ratings, ageAfterBirthday: nu
   const attr3 = clamp(ratings.attr3 * scale)
   const overall = clamp((attr1 + attr2 + attr3) / 3)
 
-  return { overall, potential: ratings.potential, attr1, attr2, attr3 }
+  // A stale "still has a much higher ceiling" number stops meaning anything
+  // once a player is well past the age real careers peak - for every
+  // position except QB/K/P, keep shrinking that gap each year past 24
+  // rather than letting it sit fixed at whatever was rolled at 22. QB/K/P
+  // are exempt, same as at generation - real careers there can still
+  // extend or even peak well into their 30s.
+  let potential = ratings.potential
+  if (!AGE_DECLINE_EXEMPT_POSITIONS.has(position) && ageAfterBirthday > 24) {
+    const remainingGap = Math.max(0, potential - overall)
+    potential = clamp(overall + remainingGap * 0.75, overall, 99)
+  } else {
+    potential = clamp(potential, overall, 99)
+  }
+
+  return { overall, potential, attr1, attr2, attr3 }
 }
 
 export function progressPlayer(rng: Rng, player: Player): Player {
-  return { ...player, ratings: progressRatings(rng, player.ratings, player.age) }
+  return { ...player, ratings: progressRatings(rng, player.position, player.ratings, player.age) }
 }

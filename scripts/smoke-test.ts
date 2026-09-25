@@ -248,6 +248,30 @@ async function main() {
   })()
 
   await (async () => {
+    // Potential is meant to represent real remaining upside - a 30-year-old
+    // running back or corner shouldn't be sitting on a potential far above
+    // his current overall (real careers overwhelmingly decline with age at
+    // those positions), while QB/K/P are allowed to keep a real gap since
+    // those careers can extend or even peak into their late 30s.
+    const allPlayers = await db.players.toArray()
+    const exempt = new Set(['QB', 'K', 'P'])
+    const oldDeclinePositionPlayers = allPlayers.filter((p) => p.age >= 30 && !exempt.has(p.position))
+    if (oldDeclinePositionPlayers.length > 0) {
+      const avgGap =
+        oldDeclinePositionPlayers.reduce((s, p) => s + (p.ratings.potential - p.ratings.overall), 0) /
+        oldDeclinePositionPlayers.length
+      const maxGap = Math.max(...oldDeclinePositionPlayers.map((p) => p.ratings.potential - p.ratings.overall))
+      console.log(
+        `age 30+ decline-position players: n=${oldDeclinePositionPlayers.length}, avg potential gap=${avgGap.toFixed(2)}, max=${maxGap}`,
+      )
+      if (avgGap > 3) {
+        throw new Error(`Age 30+ decline-position players still average a ${avgGap.toFixed(1)}-point potential gap`)
+      }
+    }
+    console.log('OK: potential gap shrinks with age for decline-prone positions')
+  })()
+
+  await (async () => {
     const allPlayers = await db.players.toArray()
     const overalls = allPlayers.map((p) => p.ratings.overall)
     const minOverall = Math.min(...overalls)

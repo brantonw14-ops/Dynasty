@@ -51,7 +51,34 @@ export const POSITION_ATTRIBUTES: Record<Position, [string, string, string]> = {
   P: ['Kick Accuracy', 'Kick Power', 'Clutch Gene'],
 }
 
-function generateRatings(rng: Rng, ratingOffset = 0): Ratings {
+// QBs, kickers, and punters rely far more on experience/technique than
+// athleticism, so real careers for these positions often extend (or even
+// peak) well into their 30s. Every other position's ceiling should reflect
+// the much more typical pattern of decline with age.
+export const AGE_DECLINE_EXEMPT_POSITIONS: ReadonlySet<Position> = new Set(['QB', 'K', 'P'])
+
+/**
+ * How much higher a player's potential can sit above their current overall,
+ * factoring in age. A 22-year-old prospect can plausibly still have a lot
+ * of unrealized upside; a 30-year-old at a decline-prone position almost
+ * never does - real careers overwhelmingly get worse with age past their
+ * mid-20s, with only a small fraction of outlier players (roughly 10% here)
+ * still improving. QB/K/P are exempt and keep the full age-independent
+ * upside range.
+ */
+function potentialGap(rng: Rng, position: Position, age: number): number {
+  const baseGap = Math.abs(randNormal(rng, 8, 6))
+  if (AGE_DECLINE_EXEMPT_POSITIONS.has(position)) return baseGap
+
+  const peakAge = 24
+  if (age <= peakAge) return baseGap
+
+  const declineFactor = Math.max(0, 1 - (age - peakAge) * 0.18)
+  const lateBloomer = rng() < 0.1
+  return lateBloomer ? baseGap * Math.max(0.5, declineFactor) : baseGap * declineFactor
+}
+
+function generateRatings(rng: Rng, position: Position, age: number, ratingOffset = 0): Ratings {
   // A player's three attributes aren't independent draws - a generational
   // talent tends to be good at everything, a replacement-level guy weak
   // across the board. Drawing a shared "talent" level first and then
@@ -78,7 +105,7 @@ function generateRatings(rng: Rng, ratingOffset = 0): Ratings {
   }
 
   // Potential is a ceiling, so it can never be below the player's own overall.
-  const potential = clamp(overall + Math.abs(randNormal(rng, 8, 6)), overall, 99)
+  const potential = clamp(overall + potentialGap(rng, position, age), overall, 99)
   return { overall, potential, attr1, attr2, attr3 }
 }
 
@@ -138,7 +165,7 @@ export function generatePlayer(
   const span = Math.max(1, ageCeiling - 21)
   const skewedAge = 21 + Math.floor(Math.pow(rng(), 1.8) * (span + 1))
   const age = clamp(Math.min(skewedAge, ageCeiling) + Math.round(strength?.ageOffset ?? 0), 21, maxAge)
-  const ratings = generateRatings(rng, strength?.ratingOffset ?? 0)
+  const ratings = generateRatings(rng, position, age, strength?.ratingOffset ?? 0)
   return {
     firstName,
     lastName,
