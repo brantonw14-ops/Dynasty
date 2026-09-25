@@ -65,6 +65,24 @@ export interface GameResult {
   round?: PlayoffRound
 }
 
+export interface PlayerGameStats {
+  id: number
+  leagueId: number
+  season: number
+  week: number
+  gameId: number
+  teamId: number
+  playerId: number
+  position: Position
+  passYards: number
+  passTDs: number
+  rushYards: number
+  rushTDs: number
+  recYards: number
+  recTDs: number
+  receptions: number
+}
+
 export interface ScheduledGame {
   id: number
   leagueId: number

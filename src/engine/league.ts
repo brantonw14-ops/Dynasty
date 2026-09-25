@@ -2,7 +2,7 @@ import { db } from '../db'
 import type { Conference, Division, GameResult, Player, PlayoffRound, Team } from '../types'
 import { runDraft } from './draft'
 import { computeCapSpace, expireContracts, runFreeAgency } from './freeAgency'
-import { simGame } from './gameSim'
+import { simGame, type PlayerBoxScore } from './gameSim'
 import { classifyTeamOutlook, generateRosterForTeam, rosterNeeds, type TeamOutlook } from './players'
 import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
@@ -105,14 +105,52 @@ async function generateAndStoreSchedule(
 }
 
 export async function deleteLeague(leagueId: number) {
-  await db.transaction('rw', db.leagues, db.teams, db.players, db.games, db.schedule, async () => {
-    const teams = await db.teams.toArray()
-    await db.players.where('teamId').anyOf(teams.map((t) => t.id)).delete()
-    await db.teams.bulkDelete(teams.map((t) => t.id))
-    await db.games.where({ leagueId }).delete()
-    await db.schedule.where({ leagueId }).delete()
-    await db.leagues.delete(leagueId)
-  })
+  // The app only ever holds one league's data at a time (teams/players/etc.
+  // aren't scoped by leagueId elsewhere), so wiping these tables outright is
+  // both correct and, critically, fast: table.clear() is a single native
+  // IndexedDB op, where a filtered bulkDelete walks a cursor and collects
+  // keys first - a season's worth of playerGameStats is ~16k rows, and that
+  // path took minutes instead of milliseconds.
+  await db.transaction(
+    'rw',
+    [db.leagues, db.teams, db.players, db.games, db.schedule, db.playerGameStats],
+    async () => {
+      await db.players.clear()
+      await db.teams.clear()
+      await db.games.clear()
+      await db.schedule.clear()
+      await db.playerGameStats.clear()
+      await db.leagues.delete(leagueId)
+    },
+  )
+}
+
+async function persistBoxScore(
+  leagueId: number,
+  season: number,
+  week: number,
+  gameId: number,
+  teamId: number,
+  box: Map<number, PlayerBoxScore>,
+) {
+  if (box.size === 0) return
+  const rows = [...box.values()].map((b) => ({
+    leagueId,
+    season,
+    week,
+    gameId,
+    teamId,
+    playerId: b.playerId,
+    position: b.position,
+    passYards: b.passYards,
+    passTDs: b.passTDs,
+    rushYards: b.rushYards,
+    rushTDs: b.rushTDs,
+    recYards: b.recYards,
+    recTDs: b.recTDs,
+    receptions: b.receptions,
+  }))
+  await db.playerGameStats.bulkAdd(rows as never[])
 }
 
 async function simRegularSeasonWeek(leagueId: number) {
@@ -128,7 +166,7 @@ async function simRegularSeasonWeek(leagueId: number) {
     const homeRoster = await db.players.where('teamId').equals(g.homeTeamId).toArray()
     const awayRoster = await db.players.where('teamId').equals(g.awayTeamId).toArray()
     const result = simGame(rng, homeRoster, awayRoster)
-    await db.games.add({
+    const gameId = await db.games.add({
       leagueId,
       season: league.season,
       week: league.week,
@@ -137,6 +175,8 @@ async function simRegularSeasonWeek(leagueId: number) {
       homeScore: result.homeScore,
       awayScore: result.awayScore,
     } as never)
+    await persistBoxScore(leagueId, league.season, league.week, gameId as number, g.homeTeamId, result.homeBox)
+    await persistBoxScore(leagueId, league.season, league.week, gameId as number, g.awayTeamId, result.awayBox)
   }
 
   const nextWeek = league.week + 1
@@ -179,7 +219,7 @@ async function playGame(
   const homeRoster = await db.players.where('teamId').equals(homeTeamId).toArray()
   const awayRoster = await db.players.where('teamId').equals(awayTeamId).toArray()
   const result = simGame(rng, homeRoster, awayRoster)
-  await db.games.add({
+  const gameId = await db.games.add({
     leagueId,
     season,
     week,
@@ -189,6 +229,8 @@ async function playGame(
     awayScore: result.awayScore,
     round,
   } as never)
+  await persistBoxScore(leagueId, season, week, gameId as number, homeTeamId, result.homeBox)
+  await persistBoxScore(leagueId, season, week, gameId as number, awayTeamId, result.awayBox)
 }
 
 /** Reseeds a set of remaining playoff teams: best seed vs worst, others paired in order. */

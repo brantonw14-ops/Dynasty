@@ -1,4 +1,4 @@
-import type { Player } from '../types'
+import type { Player, Position } from '../types'
 import { randNormal, type Rng } from './rng'
 
 /**
@@ -13,9 +13,116 @@ function teamStrength(roster: Player[], positions: string[]) {
   return relevant.reduce((sum, p) => sum + p.ratings.overall, 0) / relevant.length
 }
 
+export interface PlayerBoxScore {
+  playerId: number
+  position: Position
+  passYards: number
+  passTDs: number
+  rushYards: number
+  rushTDs: number
+  recYards: number
+  recTDs: number
+  receptions: number
+}
+
 export interface SimResult {
   homeScore: number
   awayScore: number
+  homeBox: Map<number, PlayerBoxScore>
+  awayBox: Map<number, PlayerBoxScore>
+}
+
+function emptyBox(playerId: number, position: Position): PlayerBoxScore {
+  return {
+    playerId,
+    position,
+    passYards: 0,
+    passTDs: 0,
+    rushYards: 0,
+    rushTDs: 0,
+    recYards: 0,
+    recTDs: 0,
+    receptions: 0,
+  }
+}
+
+function pickWeighted<T>(rng: Rng, items: T[], weightFn: (item: T) => number): T {
+  const weights = items.map(weightFn)
+  const total = weights.reduce((a, b) => a + b, 0)
+  if (total <= 0) return items[Math.floor(rng() * items.length)]
+  let r = rng() * total
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i]
+    if (r <= 0) return items[i]
+  }
+  return items[items.length - 1]
+}
+
+/**
+ * Turns a team's final score into a plausible individual box score: total
+ * yardage estimated from the score, split between passing/rushing, then
+ * distributed among the roster's skill players weighted by overall (so a
+ * team's best RB/WR sees more volume than the backups, without ever being
+ * literally the whole offense).
+ */
+function generateBoxScore(rng: Rng, roster: Player[], teamScore: number): Map<number, PlayerBoxScore> {
+  const box = new Map<number, PlayerBoxScore>()
+  const statsFor = (p: Player) => {
+    if (!box.has(p.id)) box.set(p.id, emptyBox(p.id, p.position))
+    return box.get(p.id)!
+  }
+
+  const qb = roster
+    .filter((p) => p.position === 'QB')
+    .sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+  const rbs = roster.filter((p) => p.position === 'RB')
+  const receivers = roster.filter((p) => p.position === 'WR' || p.position === 'TE')
+
+  const totalYards = Math.max(120, Math.round(teamScore * 13 + randNormal(rng, 0, 40)))
+  const passShare = Math.min(0.8, Math.max(0.4, 0.6 + randNormal(rng, 0, 0.08)))
+  const passYards = Math.round(totalYards * passShare)
+  const rushYards = totalYards - passYards
+
+  const totalTDs = Math.max(0, Math.round(teamScore / 7 + randNormal(rng, 0, 0.4)))
+  let passTDs = 0
+  let rushTDs = 0
+  for (let i = 0; i < totalTDs; i++) {
+    if (rng() < passShare * 0.85) passTDs++
+    else rushTDs++
+  }
+
+  if (qb) {
+    const stats = statsFor(qb)
+    stats.passYards += passYards
+    stats.passTDs += passTDs
+  }
+
+  const weight = (p: Player) => Math.pow(p.ratings.overall, 2.2)
+
+  if (rbs.length > 0) {
+    const totalWeight = rbs.reduce((sum, p) => sum + weight(p), 0)
+    for (const p of rbs) {
+      statsFor(p).rushYards += Math.round((rushYards * weight(p)) / totalWeight)
+    }
+    for (let i = 0; i < rushTDs; i++) {
+      statsFor(pickWeighted(rng, rbs, weight)).rushTDs += 1
+    }
+  }
+
+  if (receivers.length > 0) {
+    const totalWeight = receivers.reduce((sum, p) => sum + weight(p), 0)
+    for (const p of receivers) {
+      const yards = Math.round((passYards * weight(p)) / totalWeight)
+      const stats = statsFor(p)
+      stats.recYards += yards
+      stats.receptions += Math.max(yards > 0 ? 1 : 0, Math.round(yards / 12))
+    }
+    for (let i = 0; i < passTDs; i++) {
+      statsFor(pickWeighted(rng, receivers, weight)).recTDs += 1
+    }
+  }
+
+  return box
 }
 
 export function simGame(rng: Rng, homeRoster: Player[], awayRoster: Player[]): SimResult {
@@ -33,5 +140,8 @@ export function simGame(rng: Rng, homeRoster: Player[], awayRoster: Player[]): S
   const homeScore = Math.max(0, Math.round(randNormal(rng, homeExpected, 8)))
   const awayScore = Math.max(0, Math.round(randNormal(rng, awayExpected, 8)))
 
-  return { homeScore, awayScore }
+  const homeBox = generateBoxScore(rng, homeRoster, homeScore)
+  const awayBox = generateBoxScore(rng, awayRoster, awayScore)
+
+  return { homeScore, awayScore, homeBox, awayBox }
 }

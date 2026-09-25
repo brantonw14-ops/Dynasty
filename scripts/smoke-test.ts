@@ -66,6 +66,19 @@ async function assertSeasonSane(leagueId: number, season: number) {
   if (conference.length !== 2) throw new Error(`Expected 2 conference games, got ${conference.length}`)
   if (superbowl.length !== 1) throw new Error(`Expected 1 Super Bowl game, got ${superbowl.length}`)
 
+  const stats = await db.playerGameStats
+    .where('[leagueId+season]')
+    .equals([leagueId, season])
+    .toArray()
+  const totalGames = regular.length + wildcard.length + divisional.length + conference.length + superbowl.length
+  console.log(`season ${season}: ${stats.length} playerGameStats rows across ${totalGames} games`)
+  if (stats.length === 0) throw new Error('No player game stats were recorded for this season')
+  const passYardLeader = [...stats].sort((a, b) => b.passYards - a.passYards)[0]
+  if (passYardLeader.passYards <= 0) throw new Error('Top passer has 0 pass yards - box score generation looks broken')
+  const totalTDs = stats.reduce((s, r) => s + r.passTDs + r.rushTDs + r.recTDs, 0)
+  if (totalTDs === 0) throw new Error('No touchdowns recorded all season - box score generation looks broken')
+  console.log('OK: player game stats recorded with sane totals')
+
   // Regression test: a team's standings record must count ALL its games, not
   // just games against opponents who are also in the subset passed in (this
   // broke the division standings table, which computes each division's
@@ -292,12 +305,27 @@ async function main() {
 
   console.log('OK: multi-season smoke test passed')
 
+  const statsBeforeDelete = await db.playerGameStats.count()
+  console.log('playerGameStats rows before delete:', statsBeforeDelete)
+
+  const deleteStart = Date.now()
   await deleteLeague(leagueId)
+  const deleteMs = Date.now() - deleteStart
+  console.log('deleteLeague took', deleteMs, 'ms')
+  // Regression guard: a filtered bulkDelete over playerGameStats once hung
+  // for minutes at this row count (cursor-walked one key at a time instead
+  // of using table.clear()). A generous ceiling here still catches that
+  // class of regression without being flaky on slower CI hardware.
+  if (deleteMs > 10_000) {
+    throw new Error(`deleteLeague took ${deleteMs}ms - expected well under 10s`)
+  }
+
   const remainingLeagues = await db.leagues.count()
   const remainingTeams = await db.teams.count()
   const remainingPlayers = await db.players.count()
   const remainingGames = await db.games.count()
   const remainingSchedule = await db.schedule.count()
+  const remainingStats = await db.playerGameStats.count()
 
   console.log('after delete:', {
     remainingLeagues,
@@ -305,6 +333,7 @@ async function main() {
     remainingPlayers,
     remainingGames,
     remainingSchedule,
+    remainingStats,
   })
 
   if (
@@ -312,7 +341,8 @@ async function main() {
     remainingTeams !== 0 ||
     remainingPlayers !== 0 ||
     remainingGames !== 0 ||
-    remainingSchedule !== 0
+    remainingSchedule !== 0 ||
+    remainingStats !== 0
   ) {
     throw new Error('deleteLeague did not fully clean up')
   }

@@ -242,6 +242,104 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
   )
 }
 
+interface StatLeaderRow {
+  playerId: number
+  value: number
+  extra?: number
+}
+
+function StatsLeadersView({ leagueId, season }: { leagueId: number; season: number }) {
+  const stats = useLiveQuery(
+    () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
+    [leagueId, season],
+  )
+  const players = useLiveQuery(() => db.players.toArray(), [])
+  const teams = useLiveQuery(() => db.teams.toArray(), [])
+
+  if (!stats || !players || !teams) return <p className="text-sm text-gray-500">Loading stats...</p>
+
+  const playerById = new Map(players.map((p) => [p.id, p]))
+  const teamById = new Map(teams.map((t) => [t.id, t]))
+
+  interface StatTotals {
+    passYards: number
+    passTDs: number
+    rushYards: number
+    rushTDs: number
+    recYards: number
+    recTDs: number
+  }
+  const totals = new Map<number, StatTotals>()
+  for (const s of stats) {
+    const t = totals.get(s.playerId) ?? {
+      passYards: 0,
+      passTDs: 0,
+      rushYards: 0,
+      rushTDs: 0,
+      recYards: 0,
+      recTDs: 0,
+    }
+    t.passYards += s.passYards
+    t.passTDs += s.passTDs
+    t.rushYards += s.rushYards
+    t.rushTDs += s.rushTDs
+    t.recYards += s.recYards
+    t.recTDs += s.recTDs
+    totals.set(s.playerId, t)
+  }
+
+  const topBy = (statKey: keyof StatTotals, extraKey?: keyof StatTotals): StatLeaderRow[] =>
+    [...totals.entries()]
+      .map(([playerId, t]) => ({ playerId, value: t[statKey], extra: extraKey ? t[extraKey] : undefined }))
+      .filter((r) => r.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 5)
+
+  const categories: { title: string; unit: string; rows: StatLeaderRow[] }[] = [
+    { title: 'Passing Yards', unit: 'yds', rows: topBy('passYards', 'passTDs') },
+    { title: 'Passing TDs', unit: 'TD', rows: topBy('passTDs') },
+    { title: 'Rushing Yards', unit: 'yds', rows: topBy('rushYards', 'rushTDs') },
+    { title: 'Rushing TDs', unit: 'TD', rows: topBy('rushTDs') },
+    { title: 'Receiving Yards', unit: 'yds', rows: topBy('recYards', 'recTDs') },
+    { title: 'Receiving TDs', unit: 'TD', rows: topBy('recTDs') },
+  ]
+
+  const nameFor = (playerId: number) => {
+    const p = playerById.get(playerId)
+    if (!p) return `Player ${playerId}`
+    const team = p.teamId != null ? teamById.get(p.teamId) : undefined
+    return `${p.firstName} ${p.lastName}${team ? ` (${team.abbrev})` : ''}`
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-x-6 gap-y-6">
+      {categories.map((cat) => (
+        <div key={cat.title}>
+          <h3 className="text-sm font-semibold mb-2">{cat.title}</h3>
+          {cat.rows.length === 0 ? (
+            <p className="text-xs text-gray-500">No data yet.</p>
+          ) : (
+            <table className="w-full text-sm border-collapse">
+              <tbody>
+                {cat.rows.map((r, i) => (
+                  <tr key={r.playerId} className="border-b">
+                    <td className="py-1 text-gray-400 w-5">{i + 1}</td>
+                    <td className="py-1">{nameFor(r.playerId)}</td>
+                    <td className="py-1 text-right">
+                      {r.value.toLocaleString()} {cat.unit}
+                      {r.extra != null && r.extra > 0 ? ` · ${r.extra} TD` : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function FreeAgencyView({
   leagueId,
   userTeamId,
@@ -410,7 +508,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advancing, setAdvancing] = useState(false)
-  const [tab, setTab] = useState<'league' | 'roster' | 'trade'>('league')
+  const [tab, setTab] = useState<'league' | 'roster' | 'trade' | 'stats'>('league')
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -550,10 +648,19 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
                 Trade
               </button>
             )}
+            <button
+              onClick={() => setTab('stats')}
+              className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                tab === 'stats' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+              }`}
+            >
+              Stat Leaders
+            </button>
           </div>
 
           {tab === 'roster' && league.userTeamId != null && <RosterView teamId={league.userTeamId} />}
           {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
+          {tab === 'stats' && <StatsLeadersView leagueId={leagueId} season={league.season} />}
 
           {tab === 'league' && (
             <>
