@@ -541,7 +541,7 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
       <tbody>
         {sortRows(roster, sort, (p, key) => {
           if (key === 'name') return `${p.firstName} ${p.lastName}`
-          if (key === 'pos') return p.position
+          if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
           return p.ratings.overall
         }).map((p) => (
           <tr key={p.id} className="border-b">
@@ -887,7 +887,7 @@ function ResignView({
 
   const sorted = sortRows(roster, sort, (p, key) => {
     if (key === 'name') return `${p.firstName} ${p.lastName}`
-    if (key === 'pos') return p.position
+    if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
     if (key === 'age') return p.age
     if (key === 'pot') return p.ratings.potential
     if (key === 'grade') return grades.get(p.id) ?? ''
@@ -1067,7 +1067,7 @@ function FreeAgencyView({
   })
   const sorted = sortRows(freeAgents, sort, (p, key) => {
     if (key === 'name') return `${p.firstName} ${p.lastName}`
-    if (key === 'pos') return p.position
+    if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
     if (key === 'age') return p.age
     if (key === 'asking') return estimateFreeAgentAsk(season, p).salary
     return p.ratings.overall
@@ -1221,7 +1221,7 @@ function DraftView({
   const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
   const sorted = sortRows(available, sort, (p, key) => {
     if (key === 'name') return `${p.firstName} ${p.lastName}`
-    if (key === 'pos') return p.position
+    if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
     if (key === 'age') return p.age
     if (key === 'college') return p.college
     if (key === 'pot') return p.ratings.potential
