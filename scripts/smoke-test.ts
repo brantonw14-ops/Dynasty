@@ -136,6 +136,26 @@ async function main() {
       if (p.capSpace < 0) throw new Error(`Preview team ${p.abbrev} starts over the salary cap`)
     }
     console.log('OK: team previews vary and none start over the cap')
+
+    // Cap space should track team strength: a stacked roster spent close to
+    // the cap building it (little room left), a rebuilding one left plenty
+    // on the table - not every team converging on the same leftover amount
+    // regardless of talent.
+    const n = previews.length
+    const meanOverall = previews.reduce((s, p) => s + p.overall, 0) / n
+    const meanCap = previews.reduce((s, p) => s + p.capSpace, 0) / n
+    let cov = 0, varOverall = 0, varCap = 0
+    for (const p of previews) {
+      cov += (p.overall - meanOverall) * (p.capSpace - meanCap)
+      varOverall += (p.overall - meanOverall) ** 2
+      varCap += (p.capSpace - meanCap) ** 2
+    }
+    const correlation = cov / Math.sqrt(varOverall * varCap)
+    console.log('overall-vs-capSpace correlation:', correlation)
+    if (correlation > -0.3) {
+      throw new Error(`Expected better teams to reliably have less cap space, correlation was only ${correlation}`)
+    }
+    console.log('OK: cap space is negatively correlated with team overall')
   })()
 
   const leagueId = await createLeague('Smoke Test League', 0, seed)

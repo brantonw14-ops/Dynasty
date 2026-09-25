@@ -68,6 +68,7 @@ function generateContractSalary(rng: Rng, overall: number, age: number, spendFac
  * and more space left over.
  */
 export interface TeamStrength {
+  skill: number
   ratingOffset: number
   ageOffset: number
   spendFactor: number
@@ -77,6 +78,7 @@ export function generateTeamStrength(rng: Rng): TeamStrength {
   // Roughly a z-score: most teams cluster near 0, a handful sit at the extremes.
   const skill = randNormal(rng, 0, 1)
   return {
+    skill,
     ratingOffset: skill * 6,
     ageOffset: skill * 1.5,
     spendFactor: 1 + skill * 0.12,
@@ -141,12 +143,16 @@ export function generateRosterForTeam(rng: Rng, teamId: number): Omit<Player, 'i
   }
   players = assignDepthOrder(players)
 
-  // Real rosters are never allowed over the cap. A high skill+spend roll can
-  // combine to push a stacked team over it, so scale every contract down
-  // proportionally if needed - always leaves at least ~8% cap space, and
-  // keeps each player's salary relative to their teammates' unchanged.
+  // Real rosters are never allowed over the cap, but how much room is left
+  // under it should track team strength: a stacked contender spent up
+  // close to the cap building that roster (little room left), while a
+  // rebuilding team left plenty on the table. Without this, every team
+  // that happened to generate over its ceiling got scaled down to the
+  // *same* fixed ceiling regardless of talent, so a great team and a
+  // mediocre one ended up with identical cap space.
+  const maxSpendFraction = Math.max(0.72, Math.min(0.98, 0.85 + strength.skill * 0.06))
   const totalSalary = players.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
-  const maxSpend = SALARY_CAP * 0.92
+  const maxSpend = SALARY_CAP * maxSpendFraction
   if (totalSalary > maxSpend) {
     const scale = maxSpend / totalSalary
     for (const p of players) {
