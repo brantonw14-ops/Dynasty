@@ -242,8 +242,9 @@ export function nextDepthOrder(existingRoster: { position: Position; depthOrder:
 }
 
 // Roughly how many players at each position see meaningful game-day snaps -
-// used to weight a position's contribution to the team-wide overall rating.
-const STARTER_COUNTS: Record<Position, number> = {
+// used both to weight a position's contribution to the team-wide overall
+// rating, and to mark who's a "starter" vs "bench" on the roster screen.
+export const STARTER_COUNTS: Record<Position, number> = {
   QB: 1, RB: 2, WR: 3, TE: 1, OL: 5, DL: 4, LB: 3, CB: 3, S: 2, K: 1, P: 1,
 }
 

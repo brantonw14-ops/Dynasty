@@ -18,7 +18,13 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
-import { computePositionOverall, computeTeamOverall, POSITION_ATTRIBUTES, rosterNeeds } from './engine/players'
+import {
+  computePositionOverall,
+  computeTeamOverall,
+  POSITION_ATTRIBUTES,
+  rosterNeeds,
+  STARTER_COUNTS,
+} from './engine/players'
 import { marketSalary } from './engine/salary'
 import { gradeSeasonPerformance, type SeasonGrade } from './engine/seasonPerformance'
 import { computeConferenceSeeds, computeStandings } from './engine/standings'
@@ -248,7 +254,9 @@ function RosterView({
         {roster.some((p) => p.injury) && (
           <> &middot; {roster.filter((p) => p.injury).length} injured</>
         )}
-        {editable && <> &middot; Use the arrows to set your depth chart / starters</>}
+        {editable && (
+          <> &middot; Use the arrows to move a player up into the starting group (green) or down to the bench (gray) - starters get the bulk of the playing time, bench players see the field far less</>
+        )}
       </p>
 
       {POSITION_ORDER.map((pos) => {
@@ -256,6 +264,7 @@ function RosterView({
         if (!players || players.length === 0) return null
         const positionOverall = Math.round(computePositionOverall(players))
         const attrLabels = POSITION_ATTRIBUTES[pos]
+        const starterCount = Math.min(STARTER_COUNTS[pos] ?? 1, players.length)
         return (
           <div key={pos} className="mb-6">
             <div className="flex items-baseline gap-2 mb-2">
@@ -271,6 +280,7 @@ function RosterView({
               <thead>
                 <tr className="text-left text-gray-400 border-b">
                   {editable && <th className="py-1 pr-2 w-10"></th>}
+                  <th className="py-1 pr-2 w-16">Status</th>
                   <th className="py-1 pr-6 min-w-[11rem]">Name</th>
                   <th className="py-1 px-2 text-right w-12">Age</th>
                   <th className="py-1 px-2 text-right w-12">OVR</th>
@@ -284,54 +294,68 @@ function RosterView({
                 </tr>
               </thead>
               <tbody>
-                {players.map((p, i) => (
-                  <tr key={p.id} className="border-b">
-                    {editable && (
-                      <td className="py-1 pr-2">
-                        <div className="flex gap-1">
-                          <button
-                            onClick={() => handleMove(p.id, 'up')}
-                            disabled={moving === p.id || i === 0}
-                            className="px-1 border rounded text-[10px] disabled:opacity-30"
-                            title="Move up depth chart"
-                          >
-                            ↑
-                          </button>
-                          <button
-                            onClick={() => handleMove(p.id, 'down')}
-                            disabled={moving === p.id || i === players.length - 1}
-                            className="px-1 border rounded text-[10px] disabled:opacity-30"
-                            title="Move down depth chart"
-                          >
-                            ↓
-                          </button>
-                        </div>
-                      </td>
-                    )}
-                    <td className="py-1 pr-6 whitespace-nowrap">
-                      {i === 0 && <span className="text-[10px] text-gray-500 mr-1">1st</span>}
-                      {p.firstName} {p.lastName}
-                      {p.injury && (
-                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-900 text-red-200">
-                          {p.injury.description} · {p.injury.weeksRemaining}wk
-                        </span>
+                {players.map((p, i) => {
+                  const isStarter = i < starterCount
+                  return (
+                    <tr
+                      key={p.id}
+                      className={`border-b ${i === starterCount ? 'border-t-2 border-t-gray-600' : ''}`}
+                    >
+                      {editable && (
+                        <td className="py-1 pr-2">
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => handleMove(p.id, 'up')}
+                              disabled={moving === p.id || i === 0}
+                              className="px-1 border rounded text-[10px] disabled:opacity-30"
+                              title="Move up depth chart"
+                            >
+                              ↑
+                            </button>
+                            <button
+                              onClick={() => handleMove(p.id, 'down')}
+                              disabled={moving === p.id || i === players.length - 1}
+                              className="px-1 border rounded text-[10px] disabled:opacity-30"
+                              title="Move down depth chart"
+                            >
+                              ↓
+                            </button>
+                          </div>
+                        </td>
                       )}
-                    </td>
-                    <td className="py-1 px-2 text-right">{p.age}</td>
-                    <td className="py-1 px-2 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
-                    <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
-                    <td className="py-1 px-2 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
-                    <td className="py-1 px-2 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
-                    <td className="py-1 px-2 text-right" title={attrLabels[2]}>{p.ratings.attr3}</td>
-                    <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
-                      {p.contract ? formatMoney(p.contract.salary) : '-'}
-                    </td>
-                    <td className="py-1 px-2 text-right">{p.contract?.yearsLeft ?? '-'}</td>
-                    <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
-                      {seasonStatLine(p.position, statTotals.get(p.id))}
-                    </td>
-                  </tr>
-                ))}
+                      <td className="py-1 pr-2">
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${
+                            isStarter ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-300'
+                          }`}
+                        >
+                          {isStarter ? 'STARTER' : 'BENCH'}
+                        </span>
+                      </td>
+                      <td className="py-1 pr-6 whitespace-nowrap">
+                        {p.firstName} {p.lastName}
+                        {p.injury && (
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-900 text-red-200">
+                            {p.injury.description} · {p.injury.weeksRemaining}wk
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1 px-2 text-right">{p.age}</td>
+                      <td className="py-1 px-2 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                      <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
+                      <td className="py-1 px-2 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
+                      <td className="py-1 px-2 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
+                      <td className="py-1 px-2 text-right" title={attrLabels[2]}>{p.ratings.attr3}</td>
+                      <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
+                        {p.contract ? formatMoney(p.contract.salary) : '-'}
+                      </td>
+                      <td className="py-1 px-2 text-right">{p.contract?.yearsLeft ?? '-'}</td>
+                      <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
+                        {seasonStatLine(p.position, statTotals.get(p.id))}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
