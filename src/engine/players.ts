@@ -27,7 +27,7 @@ export function rosterNeeds(roster: Player[]): Position[] {
 
 export const MIN_OVERALL = 55
 
-function clamp(n: number, min = 40, max = 99) {
+export function clamp(n: number, min = 40, max = 99) {
   return Math.max(min, Math.min(max, Math.round(n)))
 }
 
@@ -66,7 +66,7 @@ export const AGE_DECLINE_EXEMPT_POSITIONS: ReadonlySet<Position> = new Set(['QB'
  * still improving. QB/K/P are exempt and keep the full age-independent
  * upside range.
  */
-function potentialGap(rng: Rng, position: Position, age: number): number {
+export function potentialGap(rng: Rng, position: Position, age: number): number {
   const baseGap = Math.abs(randNormal(rng, 8, 6))
   if (AGE_DECLINE_EXEMPT_POSITIONS.has(position)) return baseGap
 
@@ -78,7 +78,7 @@ function potentialGap(rng: Rng, position: Position, age: number): number {
   return lateBloomer ? baseGap * Math.max(0.5, declineFactor) : baseGap * declineFactor
 }
 
-function generateRatings(rng: Rng, position: Position, age: number, ratingOffset = 0): Ratings {
+export function generateRatings(rng: Rng, position: Position, age: number, ratingOffset = 0): Ratings {
   // A player's three attributes aren't independent draws - a generational
   // talent tends to be good at everything, a replacement-level guy weak
   // across the board. Drawing a shared "talent" level first and then

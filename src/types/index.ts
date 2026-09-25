@@ -128,7 +128,13 @@ export interface ScheduledGame {
   awayTeamId: number
 }
 
-export type LeaguePhase = 'regular' | 'playoffs' | 'complete' | 'resign' | 'freeagency'
+export type LeaguePhase = 'regular' | 'playoffs' | 'complete' | 'resign' | 'freeagency' | 'draft'
+
+export interface DraftPickLogEntry {
+  pickNumber: number
+  teamId: number
+  prospectIndex: number
+}
 
 export interface League {
   id: number
@@ -140,4 +146,14 @@ export interface League {
   champTeamId: number | null
   userTeamId: number | null
   createdAt: number
+  // Draft-in-progress state. The prospect pool itself is never persisted -
+  // it's regenerated on demand from draftSeed (deterministic), only which
+  // prospects have been taken and whose turn it is needs to live here.
+  draftSeed?: number
+  draftPositions?: Position[]
+  draftOrderTeamIds?: number[]
+  draftRound?: number
+  draftOrderIndex?: number
+  draftPickedIndices?: number[]
+  draftLog?: DraftPickLogEntry[]
 }

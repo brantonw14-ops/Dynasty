@@ -2,14 +2,16 @@ import 'fake-indexeddb/auto'
 import { db } from '../src/db'
 import {
   advanceToFreeAgency,
+  beginDraft,
   createLeague,
   cutPlayer,
   deleteLeague,
+  getDraftBoard,
   getSeasonHistory,
+  makeUserDraftPick,
   moveDepthChart,
   openFreeAgency,
   previewLeagueTeams,
-  proceedToDraft,
   proposeTrade,
   resignPlayer,
   signFreeAgent,
@@ -699,22 +701,59 @@ async function main() {
   if (!signedPlayer.contract) throw new Error('Signed player has no contract')
   console.log('OK: signed a free agent to the user team')
 
-  const draftResult = await proceedToDraft(leagueId)
+  const rosterCountBeforeDraft = await db.players.count()
+  await beginDraft(leagueId)
+
+  // Drive the interactive draft to completion: whenever it's the user's
+  // turn, pick the best available prospect at a position they need; AI
+  // turns already auto-advance inside beginDraft/makeUserDraftPick.
+  let draftedCount = 0
+  let board = await getDraftBoard(leagueId)
+  if (!board) throw new Error('Expected a draft board to be set up after beginDraft')
+
+  // Sanity-check the draft class itself before drafting anyone from it:
+  // real colleges, age cap, and the overall curve (87 max, only 2-3 that
+  // high, tapering down from there).
+  if (board.prospects.length === 0) throw new Error('Draft class is empty')
+  for (const p of board.prospects) {
+    if (p.age > 25) throw new Error(`Prospect ${p.firstName} ${p.lastName} is age ${p.age}, above the 25 cap`)
+    if (p.ratings.overall > 87) throw new Error(`Prospect overall ${p.ratings.overall} exceeds the 87 draft-class cap`)
+    if (!p.college) throw new Error('Prospect is missing a college')
+  }
+  const eliteProspects = board.prospects.filter((p) => p.ratings.overall >= 87)
+  console.log(
+    `draft class: ${board.prospects.length} prospects, ${eliteProspects.length} at the 87 overall cap, oldest age ${Math.max(...board.prospects.map((p) => p.age))}`,
+  )
+  if (eliteProspects.length < 1 || eliteProspects.length > 3) {
+    throw new Error(`Expected 1-3 prospects at the overall cap, got ${eliteProspects.length}`)
+  }
+
+  let guard = 0
+  while (board && board.pickedIndices.size < board.totalPicks && guard < board.totalPicks + 5) {
+    guard++
+    if (!board.isUserTurn) break // AI-only remainder already resolved internally
+    const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
+    const userRoster = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
+    const needs = new Set(rosterNeeds(userRoster))
+    const pick = available.filter((p) => needs.has(p.position)).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+    if (!pick) break
+    await makeUserDraftPick(leagueId, pick.index)
+    draftedCount++
+    board = await getDraftBoard(leagueId)
+  }
+  console.log(`OK: user made ${draftedCount} draft picks interactively`)
+
   const rosterCountAfter = await db.players.count()
   const leagueAfterOffseason = await db.leagues.get(leagueId)
 
-  console.log('draft:', draftResult)
   console.log('roster count before/after FA+draft:', rosterCountBefore, rosterCountAfterFA, rosterCountAfter)
   console.log('season after offseason:', leagueAfterOffseason?.season, leagueAfterOffseason?.phase)
 
   if (leagueAfterOffseason?.phase !== 'regular' || leagueAfterOffseason.week !== 1) {
-    throw new Error('League did not roll into a fresh regular season')
+    throw new Error('League did not roll into a fresh regular season after the draft')
   }
-  if (
-    rosterCountAfter !==
-    rosterCountBefore - faResult.retiredCount + draftResult.draftedCount
-  ) {
-    throw new Error('Roster count after offseason does not reconcile with retirements/draft picks')
+  if (rosterCountAfter <= rosterCountBeforeDraft) {
+    throw new Error('Roster count did not grow from draft picks')
   }
 
   await playSeason(leagueId)

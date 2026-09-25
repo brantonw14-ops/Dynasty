@@ -3,15 +3,17 @@ import { useMemo, useState } from 'react'
 import { db } from './db'
 import {
   advanceToFreeAgency,
+  beginDraft,
   createLeague,
   cutPlayer,
   deleteLeague,
   estimateFreeAgentAsk,
+  getDraftBoard,
   getSeasonHistory,
+  makeUserDraftPick,
   moveDepthChart,
   openFreeAgency,
   previewLeagueTeams,
-  proceedToDraft,
   proposeTrade,
   resignPlayer,
   signFreeAgent,
@@ -61,6 +63,50 @@ const ROUND_LABELS: Record<PlayoffRound, string> = {
   superbowl: 'Super Bowl',
 }
 const ROUND_ORDER: PlayoffRound[] = ['wildcard', 'divisional', 'conference', 'superbowl']
+
+interface SortState {
+  key: string
+  dir: 'asc' | 'desc'
+}
+
+/** Sortable <th>: click to sort by this column, click again to flip direction. */
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  setSort,
+  className = '',
+}: {
+  label: string
+  sortKey: string
+  sort: SortState
+  setSort: (s: SortState) => void
+  className?: string
+}) {
+  const active = sort.key === sortKey
+  return (
+    <th
+      className={`py-1 cursor-pointer select-none hover:text-gray-200 ${className}`}
+      onClick={() => setSort({ key: sortKey, dir: active && sort.dir === 'desc' ? 'asc' : 'desc' })}
+    >
+      {label}
+      {active ? (sort.dir === 'desc' ? ' ▼' : ' ▲') : ''}
+    </th>
+  )
+}
+
+/** Generic sort by a value-extractor keyed off SortState.key; falls back to leaving order unchanged for an unknown key. */
+function sortRows<T>(rows: T[], sort: SortState, valueFor: (row: T, key: string) => number | string): T[] {
+  const dir = sort.dir === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    const va = valueFor(a, sort.key)
+    const vb = valueFor(b, sort.key)
+    if (typeof va === 'string' || typeof vb === 'string') {
+      return String(va).localeCompare(String(vb)) * dir
+    }
+    return (va - vb) * dir
+  })
+}
 
 function formatMoney(n: number) {
   return `$${(n / 1_000_000).toFixed(1)}M`
@@ -383,6 +429,8 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
   const [getIds, setGetIds] = useState<Set<number>>(new Set())
   const [proposing, setProposing] = useState(false)
   const [result, setResult] = useState<{ accepted: boolean; reason: string } | null>(null)
+  const [giveSort, setGiveSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
+  const [getSort, setGetSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
 
   const otherRoster = useLiveQuery(
     (): Promise<Player[]> =>
@@ -421,35 +469,39 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
     roster: Player[],
     selected: Set<number>,
     setFn: (s: Set<number>) => void,
+    sort: SortState,
+    setSort: (s: SortState) => void,
   ) => (
     <table className="w-full text-sm border-collapse">
       <thead>
         <tr className="text-left text-gray-400 border-b">
           <th className="py-1"></th>
-          <th className="py-1">Name</th>
-          <th className="py-1">Pos</th>
-          <th className="py-1 text-right">OVR</th>
+          <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} />
+          <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} />
+          <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" />
         </tr>
       </thead>
       <tbody>
-        {[...roster]
-          .sort((a, b) => b.ratings.overall - a.ratings.overall)
-          .map((p) => (
-            <tr key={p.id} className="border-b">
-              <td className="py-1">
-                <input
-                  type="checkbox"
-                  checked={selected.has(p.id)}
-                  onChange={() => toggle(selected, setFn, p.id)}
-                />
-              </td>
-              <td className="py-1">
-                {p.firstName} {p.lastName}
-              </td>
-              <td className="py-1">{p.position}</td>
-              <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
-            </tr>
-          ))}
+        {sortRows(roster, sort, (p, key) => {
+          if (key === 'name') return `${p.firstName} ${p.lastName}`
+          if (key === 'pos') return p.position
+          return p.ratings.overall
+        }).map((p) => (
+          <tr key={p.id} className="border-b">
+            <td className="py-1">
+              <input
+                type="checkbox"
+                checked={selected.has(p.id)}
+                onChange={() => toggle(selected, setFn, p.id)}
+              />
+            </td>
+            <td className="py-1">
+              {p.firstName} {p.lastName}
+            </td>
+            <td className="py-1">{p.position}</td>
+            <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+          </tr>
+        ))}
       </tbody>
     </table>
   )
@@ -480,11 +532,11 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
           <div className="grid grid-cols-2 gap-6 mb-4">
             <div>
               <h3 className="text-sm font-semibold mb-2">You give ({giveIds.size})</h3>
-              {renderRoster(myRoster, giveIds, setGiveIds)}
+              {renderRoster(myRoster, giveIds, setGiveIds, giveSort, setGiveSort)}
             </div>
             <div>
               <h3 className="text-sm font-semibold mb-2">You get ({getIds.size})</h3>
-              {renderRoster(otherRoster, getIds, setGetIds)}
+              {renderRoster(otherRoster, getIds, setGetIds, getSort, setGetSort)}
             </div>
           </div>
 
@@ -728,6 +780,7 @@ function ResignView({
   const [yearsByPlayer, setYearsByPlayer] = useState<Map<number, number>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [opening, setOpening] = useState(false)
+  const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
 
   if (!roster || !leagueStats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
@@ -775,7 +828,16 @@ function ResignView({
     }
   }
 
-  const sorted = [...roster].sort((a, b) => b.ratings.overall - a.ratings.overall)
+  const sorted = sortRows(roster, sort, (p, key) => {
+    if (key === 'name') return `${p.firstName} ${p.lastName}`
+    if (key === 'pos') return p.position
+    if (key === 'age') return p.age
+    if (key === 'pot') return p.ratings.potential
+    if (key === 'grade') return grades.get(p.id) ?? ''
+    if (key === 'salary') return p.contract?.salary ?? -1
+    if (key === 'yrs') return p.contract?.yearsLeft ?? -1
+    return p.ratings.overall
+  })
   const needsDecisionCount = roster.filter((p) => p.contract === null).length
 
   return (
@@ -805,14 +867,15 @@ function ResignView({
       <table className="text-sm border-collapse">
         <thead>
           <tr className="text-left text-gray-400 border-b">
-            <th className="py-1 pr-6 min-w-[11rem]">Name</th>
-            <th className="py-1 px-2">Pos</th>
-            <th className="py-1 px-2 text-right">Age</th>
-            <th className="py-1 px-2 text-right">OVR</th>
-            <th className="py-1 px-2 text-right">Grade</th>
+            <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-6 min-w-[11rem]" />
+            <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} className="px-2" />
+            <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="px-2 text-right" />
+            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="px-2 text-right" />
+            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="px-2 text-right" />
+            <SortHeader label="Grade" sortKey="grade" sort={sort} setSort={setSort} className="px-2 text-right" />
             <th className="py-1 pl-6 text-left">Last Season</th>
-            <th className="py-1 pl-4 pr-2 text-right">Salary</th>
-            <th className="py-1 px-2 text-right">Yrs Left</th>
+            <SortHeader label="Salary" sortKey="salary" sort={sort} setSort={setSort} className="pl-4 pr-2 text-right" />
+            <SortHeader label="Yrs Left" sortKey="yrs" sort={sort} setSort={setSort} className="px-2 text-right" />
             <th className="py-1 pl-4"></th>
           </tr>
         </thead>
@@ -833,6 +896,7 @@ function ResignView({
                 <td className="py-1 px-2">{p.position}</td>
                 <td className="py-1 px-2 text-right">{p.age}</td>
                 <td className="py-1 px-2 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                 <td className={`py-1 px-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-600'}`}>
                   {grade ?? '-'}
                 </td>
@@ -890,11 +954,13 @@ function FreeAgencyView({
   leagueId,
   userTeamId,
   season,
+  showDraftButton,
   onProceedToDraft,
 }: {
   leagueId: number
   userTeamId: number
   season: number
+  showDraftButton: boolean
   onProceedToDraft: () => void
 }) {
   const roster = useLiveQuery(
@@ -908,12 +974,19 @@ function FreeAgencyView({
   const [signingId, setSigningId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [advancing, setAdvancing] = useState(false)
+  const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
 
   if (!roster || !freeAgents) return <p className="text-sm text-gray-500">Loading free agents...</p>
 
   const needs = rosterNeeds(roster)
   const capSpace = computeCapSpace(roster)
-  const sorted = [...freeAgents].sort((a, b) => b.ratings.overall - a.ratings.overall)
+  const sorted = sortRows(freeAgents, sort, (p, key) => {
+    if (key === 'name') return `${p.firstName} ${p.lastName}`
+    if (key === 'pos') return p.position
+    if (key === 'age') return p.age
+    if (key === 'asking') return estimateFreeAgentAsk(season, p).salary
+    return p.ratings.overall
+  })
 
   const handleSign = async (playerId: number) => {
     setError(null)
@@ -930,7 +1003,7 @@ function FreeAgencyView({
   const handleProceed = async () => {
     setAdvancing(true)
     try {
-      await proceedToDraft(leagueId)
+      await beginDraft(leagueId)
       onProceedToDraft()
     } finally {
       setAdvancing(false)
@@ -944,13 +1017,15 @@ function FreeAgencyView({
           Cap space {formatMoney(capSpace)} &middot; Needs:{' '}
           {needs.length > 0 ? [...new Set(needs)].join(', ') : 'roster full'}
         </p>
-        <button
-          onClick={handleProceed}
-          disabled={advancing}
-          className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50"
-        >
-          {advancing ? 'Running draft...' : 'Proceed to Draft'}
-        </button>
+        {showDraftButton && (
+          <button
+            onClick={handleProceed}
+            disabled={advancing}
+            className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50"
+          >
+            {advancing ? 'Starting draft...' : 'Enter the Draft'}
+          </button>
+        )}
       </div>
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
@@ -958,11 +1033,11 @@ function FreeAgencyView({
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="text-left text-gray-400 border-b">
-            <th className="py-1">Name</th>
-            <th className="py-1">Pos</th>
-            <th className="py-1 text-right">Age</th>
-            <th className="py-1 text-right">OVR</th>
-            <th className="py-1 text-right">Asking</th>
+            <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} />
+            <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} />
+            <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="text-right" />
+            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" />
+            <SortHeader label="Asking" sortKey="asking" sort={sort} setSort={setSort} className="text-right" />
             <th className="py-1"></th>
           </tr>
         </thead>
@@ -998,6 +1073,152 @@ function FreeAgencyView({
             <tr>
               <td colSpan={6} className="text-sm text-gray-500 py-2">
                 No free agents available.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+const COLLEGE_TIER_LABELS: Record<number, string> = {
+  1: 'Blue Blood',
+  2: 'Strong Program',
+  3: 'Mid-Major',
+  4: 'Small Program',
+}
+
+function DraftView({
+  leagueId,
+  userTeamId,
+  teamName,
+}: {
+  leagueId: number
+  userTeamId: number | null
+  teamName: (id: number) => string
+}) {
+  const board = useLiveQuery(() => getDraftBoard(leagueId), [leagueId])
+  const userRoster = useLiveQuery(
+    (): Promise<Player[]> =>
+      userTeamId != null ? db.players.where('teamId').equals(userTeamId).toArray() : Promise.resolve([]),
+    [userTeamId],
+  )
+  const [pickingIndex, setPickingIndex] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
+
+  if (board === undefined || !userRoster) return <p className="text-sm text-gray-500">Loading draft board...</p>
+  if (board === null) return <p className="text-sm text-gray-500">No draft in progress.</p>
+
+  const userNeeds = new Set(rosterNeeds(userRoster))
+  const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
+  const sorted = sortRows(available, sort, (p, key) => {
+    if (key === 'name') return `${p.firstName} ${p.lastName}`
+    if (key === 'pos') return p.position
+    if (key === 'age') return p.age
+    if (key === 'college') return p.college
+    if (key === 'pot') return p.ratings.potential
+    return p.ratings.overall
+  })
+
+  const handlePick = async (prospectIndex: number) => {
+    setError(null)
+    setPickingIndex(prospectIndex)
+    try {
+      await makeUserDraftPick(leagueId, prospectIndex)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPickingIndex(null)
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-sm text-gray-500 mb-2">
+        Pick {board.pickNumber} of {board.totalPicks}
+        {board.currentTeamId != null && (
+          <>
+            {' '}
+            &middot; On the clock: <span className={board.isUserTurn ? 'text-blue-300 font-semibold' : ''}>{teamName(board.currentTeamId)}</span>
+          </>
+        )}
+        {board.isUserTurn && <span className="ml-2 text-green-400 font-semibold">Your pick!</span>}
+      </p>
+
+      {!board.isUserTurn && board.currentTeamId != null && (
+        <p className="text-xs text-gray-600 mb-3">Waiting on {teamName(board.currentTeamId)} to pick...</p>
+      )}
+
+      {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+
+      {board.log.length > 0 && (
+        <details className="mb-4">
+          <summary className="text-xs text-gray-500 cursor-pointer">Draft results so far ({board.log.length})</summary>
+          <ul className="text-xs text-gray-500 mt-2 space-y-0.5">
+            {[...board.log].reverse().map((entry) => {
+              const prospect = board.prospects[entry.prospectIndex]
+              return (
+                <li key={entry.pickNumber}>
+                  Pick {entry.pickNumber}: {teamName(entry.teamId)} selected {prospect.firstName} {prospect.lastName} (
+                  {prospect.position}, {prospect.ratings.overall} OVR, {prospect.college})
+                </li>
+              )
+            })}
+          </ul>
+        </details>
+      )}
+
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="text-left text-gray-400 border-b">
+            <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-4" />
+            <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} className="pr-4" />
+            <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="pr-4 text-right" />
+            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="pr-4 text-right" />
+            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="pr-4 text-right" />
+            <SortHeader label="College" sortKey="college" sort={sort} setSort={setSort} className="pr-4" />
+            <th className="py-1 pr-4">College Stats</th>
+            <th className="py-1 pr-4">Scouting Report</th>
+            <th className="py-1"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((p) => {
+            const needed = userNeeds.has(p.position)
+            return (
+              <tr key={p.index} className="border-b align-top">
+                <td className="py-1 pr-4 whitespace-nowrap">
+                  {p.firstName} {p.lastName}
+                </td>
+                <td className="py-1 pr-4">{p.position}</td>
+                <td className="py-1 pr-4 text-right">{p.age}</td>
+                <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
+                <td className="py-1 pr-4 whitespace-nowrap">
+                  {p.college}
+                  <div className="text-[10px] text-gray-600">{COLLEGE_TIER_LABELS[p.collegeTier]}</div>
+                </td>
+                <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{p.collegeStatLine}</td>
+                <td className="py-1 pr-4 text-gray-500 max-w-xs">{p.scoutingNote}</td>
+                <td className="py-1 text-right">
+                  <button
+                    onClick={() => handlePick(p.index)}
+                    disabled={!board.isUserTurn || !needed || pickingIndex === p.index}
+                    title={!needed ? `Your roster doesn't need another ${p.position}` : undefined}
+                    className="px-2 py-1 border rounded text-xs disabled:opacity-40 whitespace-nowrap"
+                  >
+                    {pickingIndex === p.index ? '...' : 'Draft'}
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
+          {sorted.length === 0 && (
+            <tr>
+              <td colSpan={9} className="text-sm text-gray-500 py-2">
+                No prospects left on the board.
               </td>
             </tr>
           )}
@@ -1149,7 +1370,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advancing, setAdvancing] = useState(false)
-  const [tab, setTab] = useState<'league' | 'roster' | 'trade' | 'stats' | 'history'>('league')
+  const [tab, setTab] = useState<'league' | 'roster' | 'trade' | 'freeagents' | 'stats' | 'history'>('league')
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -1213,7 +1434,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
                   ? 'Manage Roster'
                   : league.phase === 'freeagency'
                     ? 'Free Agency'
-                    : 'Complete'}
+                    : league.phase === 'draft'
+                      ? 'Draft'
+                      : 'Complete'}
             {league.userTeamId != null && <> &middot; Your team: {teamName(league.userTeamId)}</>}
           </p>
         </div>
@@ -1226,7 +1449,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             >
               {advancing ? 'Advancing...' : `Start ${league.season + 1} Offseason`}
             </button>
-          ) : league.phase === 'freeagency' || league.phase === 'resign' ? null : (
+          ) : league.phase === 'freeagency' || league.phase === 'resign' || league.phase === 'draft' ? null : (
             <button
               onClick={handleSimWeek}
               disabled={simming}
@@ -1269,8 +1492,14 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             leagueId={leagueId}
             userTeamId={league.userTeamId}
             season={league.season}
+            showDraftButton
             onProceedToDraft={() => setTab('league')}
           />
+        </>
+      ) : league.phase === 'draft' ? (
+        <>
+          <h2 className="text-lg font-medium mb-2">Draft</h2>
+          <DraftView leagueId={leagueId} userTeamId={league.userTeamId} teamName={teamName} />
         </>
       ) : (
         <>
@@ -1303,6 +1532,16 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
                 Trade
               </button>
             )}
+            {league.userTeamId != null && (
+              <button
+                onClick={() => setTab('freeagents')}
+                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                  tab === 'freeagents' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+                }`}
+              >
+                Free Agents
+              </button>
+            )}
             <button
               onClick={() => setTab('stats')}
               className={`px-1 py-2 text-sm border-b-2 -mb-px ${
@@ -1325,6 +1564,15 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             <RosterView teamId={league.userTeamId} leagueId={leagueId} season={league.season} editable />
           )}
           {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
+          {tab === 'freeagents' && league.userTeamId != null && (
+            <FreeAgencyView
+              leagueId={leagueId}
+              userTeamId={league.userTeamId}
+              season={league.season}
+              showDraftButton={false}
+              onProceedToDraft={() => {}}
+            />
+          )}
           {tab === 'stats' && (
             <StatsLeadersView leagueId={leagueId} season={league.season} userTeamId={league.userTeamId} />
           )}
