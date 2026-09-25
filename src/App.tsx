@@ -43,11 +43,51 @@ function formatMoney(n: number) {
   return `$${(n / 1_000_000).toFixed(1)}M`
 }
 
-function RosterView({ teamId }: { teamId: number }) {
+function seasonStatLine(pos: Position, t?: { passYards: number; passTDs: number; rushYards: number; rushTDs: number; recYards: number; recTDs: number; receptions: number }) {
+  if (!t) return '-'
+  if (pos === 'QB' && (t.passYards > 0 || t.passTDs > 0)) return `${t.passYards} yds, ${t.passTDs} TD`
+  if (pos === 'RB' && (t.rushYards > 0 || t.rushTDs > 0 || t.recYards > 0)) {
+    return `${t.rushYards} rush yds, ${t.rushTDs} TD${t.recYards > 0 ? ` · ${t.recYards} rec yds` : ''}`
+  }
+  if ((pos === 'WR' || pos === 'TE') && (t.recYards > 0 || t.recTDs > 0)) {
+    return `${t.receptions} rec, ${t.recYards} yds, ${t.recTDs} TD`
+  }
+  return '-'
+}
+
+function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: number; season: number }) {
   const team = useLiveQuery(() => db.teams.get(teamId), [teamId])
   const roster = useLiveQuery(() => db.players.where('teamId').equals(teamId).toArray(), [teamId])
+  const stats = useLiveQuery(
+    () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
+    [leagueId, season],
+  )
 
-  if (!team || !roster) return <p className="text-sm text-gray-500">Loading roster...</p>
+  if (!team || !roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
+
+  const statTotals = new Map<
+    number,
+    { passYards: number; passTDs: number; rushYards: number; rushTDs: number; recYards: number; recTDs: number; receptions: number }
+  >()
+  for (const s of stats) {
+    const t = statTotals.get(s.playerId) ?? {
+      passYards: 0,
+      passTDs: 0,
+      rushYards: 0,
+      rushTDs: 0,
+      recYards: 0,
+      recTDs: 0,
+      receptions: 0,
+    }
+    t.passYards += s.passYards
+    t.passTDs += s.passTDs
+    t.rushYards += s.rushYards
+    t.rushTDs += s.rushTDs
+    t.recYards += s.recYards
+    t.recTDs += s.recTDs
+    t.receptions += s.receptions
+    statTotals.set(s.playerId, t)
+  }
 
   const byPosition = new Map<Position, Player[]>()
   for (const p of roster) {
@@ -80,6 +120,7 @@ function RosterView({ teamId }: { teamId: number }) {
                   <th className="py-1 text-right">POT</th>
                   <th className="py-1 text-right">Salary</th>
                   <th className="py-1 text-right">Yrs</th>
+                  <th className="py-1 text-right">Season</th>
                 </tr>
               </thead>
               <tbody>
@@ -95,6 +136,9 @@ function RosterView({ teamId }: { teamId: number }) {
                       {p.contract ? formatMoney(p.contract.salary) : '-'}
                     </td>
                     <td className="py-1 text-right">{p.contract?.yearsLeft ?? '-'}</td>
+                    <td className="py-1 text-right text-gray-500 whitespace-nowrap">
+                      {seasonStatLine(p.position, statTotals.get(p.id))}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -740,7 +784,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             </button>
           </div>
 
-          {tab === 'roster' && league.userTeamId != null && <RosterView teamId={league.userTeamId} />}
+          {tab === 'roster' && league.userTeamId != null && (
+            <RosterView teamId={league.userTeamId} leagueId={leagueId} season={league.season} />
+          )}
           {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
           {tab === 'stats' && <StatsLeadersView leagueId={leagueId} season={league.season} />}
 
