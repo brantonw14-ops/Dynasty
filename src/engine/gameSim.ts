@@ -24,6 +24,7 @@ export interface PlayerBoxScore {
   interceptions: number
   // Rushing/receiving
   rushYards: number
+  rushAttempts: number
   rushTDs: number
   recYards: number
   recTDs: number
@@ -67,6 +68,7 @@ function emptyBox(playerId: number, position: Position): PlayerBoxScore {
     passCompletions: 0,
     interceptions: 0,
     rushYards: 0,
+    rushAttempts: 0,
     rushTDs: 0,
     recYards: 0,
     recTDs: 0,
@@ -133,13 +135,19 @@ function activeWithShares(
   return active.map((player, i) => ({ player, share: rawShares[i] / total }))
 }
 
-/** NFL-style passer rating (0-158.3), used for the "passer rating allowed" defensive stat. */
-function passerRating(attempts: number, completions: number, yards: number, tds: number, ints: number) {
+/**
+ * The real NFL passer rating formula (0-158.3): each of the four
+ * components is clamped to [0, 2.375] individually before being averaged
+ * and scaled by 100. Used both for a QB's own season rating and for the
+ * "passer rating allowed" defensive stat.
+ */
+export function passerRating(attempts: number, completions: number, yards: number, tds: number, ints: number) {
   if (attempts === 0) return 0
-  const a = clamp01((completions / attempts - 0.3) * 5)
-  const b = clamp01((yards / attempts - 3) * 0.25)
-  const c = clamp01((tds / attempts) * 20)
-  const d = clamp01(2.375 - (ints / attempts) * 25)
+  const clampComponent = (n: number) => Math.max(0, Math.min(2.375, n))
+  const a = clampComponent((completions / attempts - 0.3) * 5)
+  const b = clampComponent((yards / attempts - 3) * 0.25)
+  const c = clampComponent((tds / attempts) * 20)
+  const d = clampComponent(2.375 - (ints / attempts) * 25)
   return Math.round(((a + b + c + d) / 6) * 100 * 100) / 100
 }
 
@@ -227,6 +235,7 @@ function generateOffenseBox(
     const qbRushYards = Math.max(0, Math.round(rushYards * scrambleShare * 0.35))
     if (qbRushYards > 0) {
       stats.rushYards += qbRushYards
+      stats.rushAttempts += Math.max(1, Math.round(qbRushYards / 6.5))
       rushYards -= qbRushYards
     }
   }
@@ -243,8 +252,14 @@ function generateOffenseBox(
   )
 
   if (activeRbs.length > 0) {
+    // Yards per carry averages a bit below 4.5 in the real NFL; a little
+    // game-to-game noise keeps it from being a flat constant.
+    const yardsPerCarry = Math.max(3, 4.3 + randNormal(rng, 0, 0.5))
+    const teamRushAttempts = Math.max(8, Math.round(rushYards / yardsPerCarry))
     for (const { player, share } of activeRbs) {
-      statsFor(player).rushYards += Math.round(rushYards * share)
+      const stats = statsFor(player)
+      stats.rushYards += Math.round(rushYards * share)
+      stats.rushAttempts += Math.max(1, Math.round(teamRushAttempts * share))
     }
     const weight = (p: Player) => Math.pow(p.ratings.overall, 2.2)
     for (let i = 0; i < rushTDs; i++) {

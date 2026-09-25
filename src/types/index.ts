@@ -95,6 +95,7 @@ export interface PlayerGameStats {
   passCompletions: number
   interceptions: number
   rushYards: number
+  rushAttempts: number
   rushTDs: number
   recYards: number
   recTDs: number

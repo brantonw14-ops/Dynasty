@@ -17,6 +17,7 @@ import {
 } from '../src/engine/league'
 import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
+import { passerRating } from '../src/engine/gameSim'
 import { computePositionOverall, computeTeamOverall, MIN_OVERALL, rosterNeeds } from '../src/engine/players'
 import { marketSalary } from '../src/engine/salary'
 import { gradeSeasonPerformance } from '../src/engine/seasonPerformance'
@@ -100,6 +101,39 @@ async function assertSeasonSane(leagueId: number, season: number) {
     `QB stats: ${totalCompletions}/${totalAttempts} completions, ${totalInterceptions} interceptions across the season`,
   )
   console.log('OK: QB accuracy/completion/interception stats recorded')
+
+  // Passer rating regression: each of the 4 components must be clamped to
+  // [0, 2.375] (the real NFL formula), not [0, 1] - the latter caps the
+  // whole rating at ~66.7 and was silently wrong for a season.
+  const bestQbRow = [...qbStats].sort((a, b) => {
+    const ra = passerRating(a.passAttempts, a.passCompletions, a.passYards, a.passTDs, a.interceptions)
+    const rb = passerRating(b.passAttempts, b.passCompletions, b.passYards, b.passTDs, b.interceptions)
+    return rb - ra
+  })[0]
+  const bestRating = passerRating(
+    bestQbRow.passAttempts,
+    bestQbRow.passCompletions,
+    bestQbRow.passYards,
+    bestQbRow.passTDs,
+    bestQbRow.interceptions,
+  )
+  console.log(`best single-game passer rating this season: ${bestRating}`)
+  if (bestRating <= 100) {
+    throw new Error(`Expected at least one game with passer rating > 100, best was ${bestRating} - clamp bug regressed?`)
+  }
+  if (bestRating > 158.3) throw new Error(`Passer rating ${bestRating} exceeds the real NFL max of 158.3`)
+  console.log('OK: passer rating formula is not clamped to the wrong range')
+
+  const rbStats = stats.filter((s) => s.position === 'RB' && s.rushAttempts > 0)
+  if (rbStats.length === 0) throw new Error('No RB rush-attempt stats recorded')
+  const totalCarries = rbStats.reduce((s, r) => s + r.rushAttempts, 0)
+  const totalRushYards = rbStats.reduce((s, r) => s + r.rushYards, 0)
+  const leagueYpc = totalRushYards / totalCarries
+  console.log(`RB rushing: ${totalCarries} carries, ${totalRushYards} yds, ${leagueYpc.toFixed(2)} yds/carry league-wide`)
+  if (leagueYpc < 3 || leagueYpc > 6) {
+    throw new Error(`League-wide yards per carry (${leagueYpc.toFixed(2)}) looks unrealistic (expected ~3.5-5.5)`)
+  }
+  console.log('OK: RB rush attempts recorded with a realistic yards-per-carry average')
 
   const dlLbStats = stats.filter((s) => s.position === 'DL' || s.position === 'LB')
   const totalTackles = dlLbStats.reduce((s, r) => s + r.tackles, 0)
@@ -630,6 +664,21 @@ async function main() {
     stillFreeAgents.length,
   )
   if (stillFreeAgents.length === 0) throw new Error('Expected some free agents left for the user to sign')
+
+  // Free agency shouldn't be flooded with stars - real teams proactively
+  // re-sign the players they want to keep before they ever hit the market,
+  // so the pool should skew below the league's overall talent level, not
+  // match or exceed it.
+  const leagueAvgOverall = (await db.players.toArray()).reduce((s, p) => s + p.ratings.overall, 0) / (await db.players.count())
+  const eliteFAs = stillFreeAgents.filter((p) => p.ratings.overall >= 80)
+  const eliteFaShare = eliteFAs.length / stillFreeAgents.length
+  console.log(
+    `free agent pool: ${stillFreeAgents.length} players, avg overall ${(stillFreeAgents.reduce((s, p) => s + p.ratings.overall, 0) / stillFreeAgents.length).toFixed(1)} (league avg ${leagueAvgOverall.toFixed(1)}), ${eliteFAs.length} at 80+ overall (${(eliteFaShare * 100).toFixed(1)}%)`,
+  )
+  if (eliteFaShare > 0.15) {
+    throw new Error(`${(eliteFaShare * 100).toFixed(1)}% of free agents are 80+ overall - AI retention isn't keeping stars off the market`)
+  }
+  console.log('OK: AI retention keeps free agency from being flooded with elite talent')
 
   // Elite free agents now cost real-NFL-scale money, so the top overall
   // talent on the board may not fit under the user's remaining cap space -

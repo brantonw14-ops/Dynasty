@@ -1,7 +1,7 @@
 import { db } from '../db'
 import type { Conference, Division, GameResult, Player, PlayoffRound, Team } from '../types'
 import { runDraft } from './draft'
-import { computeCapSpace, expireContracts, runFreeAgency } from './freeAgency'
+import { computeCapSpace, expireContractsWithAiRetention, runFreeAgency } from './freeAgency'
 import { simGame, type PlayerBoxScore } from './gameSim'
 import { advanceInjuries, rollNewInjuries } from './injuries'
 import { classifyTeamOutlook, generateRosterForTeam, nextDepthOrder, rosterNeeds, type TeamOutlook } from './players'
@@ -151,6 +151,7 @@ async function persistBoxScore(
     passCompletions: b.passCompletions,
     interceptions: b.interceptions,
     rushYards: b.rushYards,
+    rushAttempts: b.rushAttempts,
     rushTDs: b.rushTDs,
     recYards: b.recYards,
     recTDs: b.recTDs,
@@ -423,22 +424,15 @@ export async function advanceToFreeAgency(leagueId: number) {
   const withUpdatedPotential = adjustPotentialForSeason(allPlayers, seasonStats)
   const { retiredIds, agedPlayers } = ageAndRetire(rng, withUpdatedPotential)
   const progressedPlayers = agedPlayers.map((p) => progressPlayer(rng, p))
-  const expiredPlayers = expireContracts(progressedPlayers)
 
-  // expireContracts releases every expiring player straight to free agency,
-  // which is right for AI teams but would skip the user's own front office
-  // decision entirely. Re-attach the user's own players whose contracts
-  // just expired to their team (still with no contract - they show up in
-  // the resign window as needing a decision) so the user gets a chance to
-  // re-sign or extend them before openFreeAgency releases anyone they
-  // didn't act on.
-  const finalPlayers =
-    league.userTeamId == null
-      ? expiredPlayers
-      : expiredPlayers.map((p, i) => {
-          const wasUserPlayer = progressedPlayers[i].teamId === league.userTeamId
-          return wasUserPlayer && p.teamId === null ? { ...p, teamId: league.userTeamId } : p
-        })
+  // AI teams get a chance to proactively re-sign a player whose deal is
+  // expiring, same as real front offices do, before he'd ever reach the
+  // open market - keeps free agency from being flooded with far more good
+  // players than a real league's pool ever has. The user's own team is
+  // excluded here: their expiring players stay on the roster with no
+  // contract instead, showing up in the resign window as needing a
+  // decision, so the user gets the same kind of chance manually.
+  const finalPlayers = expireContractsWithAiRetention(rng, progressedPlayers, league.userTeamId)
 
   if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
   await db.players.bulkPut(finalPlayers as never[])
@@ -519,6 +513,18 @@ export async function openFreeAgency(leagueId: number) {
   await db.leagues.update(leagueId, { phase: 'freeagency' })
 }
 
+/**
+ * What a free agent is asking for: deterministic from their own id + the
+ * season (same rng a real signing uses), so the UI can show this up front
+ * before the user commits to an offer, not just find out after signing.
+ */
+export function estimateFreeAgentAsk(season: number, player: Player): { salary: number; years: number } {
+  const rng = createRng(season * 7919 + player.id)
+  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age) * (0.9 + rng() * 0.25))
+  const years = 1 + Math.floor(rng() * 3)
+  return { salary, years }
+}
+
 /** Signs an available free agent to the user's team during the free agency window. */
 export async function signFreeAgent(leagueId: number, playerId: number) {
   const league = await db.leagues.get(leagueId)
@@ -535,13 +541,12 @@ export async function signFreeAgent(leagueId: number, playerId: number) {
   }
 
   const capSpace = computeCapSpace(roster)
-  const rng = createRng(league.season * 7919 + playerId)
-  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age) * (0.9 + rng() * 0.25))
+  const { salary, years } = estimateFreeAgentAsk(league.season, player)
   if (salary > capSpace) throw new Error('Not enough cap space to sign this player')
 
   await db.players.update(playerId, {
     teamId: league.userTeamId,
-    contract: { salary, yearsLeft: 1 + Math.floor(rng() * 3) },
+    contract: { salary, yearsLeft: years },
     depthOrder: nextDepthOrder(roster, player.position),
   })
 }

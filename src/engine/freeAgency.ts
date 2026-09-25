@@ -10,25 +10,57 @@ export function computeCapSpace(roster: Player[]) {
   return Math.max(0, SALARY_CAP - committed)
 }
 
+function estimateSalary(rng: Rng, position: Position, overall: number, age: number) {
+  return Math.round(marketSalary(position, overall, age) * (0.9 + rng() * 0.25))
+}
+
+/** How likely a team is to proactively re-sign a player before his contract ever hits the open market. */
+function retentionChance(overall: number) {
+  if (overall >= 80) return 0.9
+  if (overall >= 70) return 0.65
+  if (overall >= 60) return 0.35
+  return 0.1
+}
+
 /**
- * Ages every contract by a year. A contract that hits 0 years left expires:
- * the player becomes a free agent (teamId/contract cleared) so they're
- * available to be re-signed in free agency rather than staying locked to
- * a team forever.
+ * Same yearly contract aging as expireContracts, but AI teams (every team
+ * except the user's) get a chance to proactively re-sign a player whose
+ * deal is about to expire, before he ever reaches the open market - just
+ * like real front offices extend the players they actually want to keep.
+ * The better the player, the more likely; a team never extends itself
+ * into being unable to afford the deal. Without this, every expiring
+ * contract league-wide (AI or user) hit free agency uncontested, flooding
+ * the pool with far more quality talent than real NFL free agency ever
+ * has - most good players get retained by their own team in real life,
+ * and only the ones a team doesn't prioritize actually reach the market.
  */
-export function expireContracts(players: Player[]): Player[] {
+export function expireContractsWithAiRetention(rng: Rng, players: Player[], userTeamId: number | null): Player[] {
+  const committedByTeam = new Map<number, number>()
+  for (const p of players) {
+    if (p.teamId != null && p.contract && p.contract.yearsLeft > 1) {
+      committedByTeam.set(p.teamId, (committedByTeam.get(p.teamId) ?? 0) + p.contract.salary)
+    }
+  }
+
   return players.map((p) => {
     if (p.teamId === null || !p.contract) return p
     const yearsLeft = p.contract.yearsLeft - 1
-    if (yearsLeft <= 0) {
-      return { ...p, teamId: null, contract: null }
-    }
-    return { ...p, contract: { ...p.contract, yearsLeft } }
-  })
-}
+    if (yearsLeft > 0) return { ...p, contract: { ...p.contract, yearsLeft } }
 
-function estimateSalary(rng: Rng, position: Position, overall: number, age: number) {
-  return Math.round(marketSalary(position, overall, age) * (0.9 + rng() * 0.25))
+    // Contract is expiring this offseason.
+    if (p.teamId === userTeamId) return { ...p, contract: null }
+
+    if (rng() < retentionChance(p.ratings.overall)) {
+      const newSalary = estimateSalary(rng, p.position, p.ratings.overall, p.age)
+      const committed = committedByTeam.get(p.teamId) ?? 0
+      if (committed + newSalary <= SALARY_CAP * 0.95) {
+        committedByTeam.set(p.teamId, committed + newSalary)
+        return { ...p, contract: { salary: newSalary, yearsLeft: randInt(rng, 1, 3) } }
+      }
+    }
+
+    return { ...p, teamId: null, contract: null }
+  })
 }
 
 export interface FreeAgentSigning {

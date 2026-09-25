@@ -6,6 +6,7 @@ import {
   createLeague,
   cutPlayer,
   deleteLeague,
+  estimateFreeAgentAsk,
   getSeasonHistory,
   moveDepthChart,
   openFreeAgency,
@@ -25,6 +26,7 @@ import {
   rosterNeeds,
   STARTER_COUNTS,
 } from './engine/players'
+import { passerRating } from './engine/gameSim'
 import { marketSalary } from './engine/salary'
 import { gradeSeasonPerformance, type SeasonGrade } from './engine/seasonPerformance'
 import { computeConferenceSeeds, computeStandings } from './engine/standings'
@@ -78,6 +80,7 @@ interface SeasonStatTotals {
   passCompletions: number
   interceptions: number
   rushYards: number
+  rushAttempts: number
   rushTDs: number
   recYards: number
   recTDs: number
@@ -110,6 +113,7 @@ function emptySeasonTotals(): SeasonStatTotals {
     passCompletions: 0,
     interceptions: 0,
     rushYards: 0,
+    rushAttempts: 0,
     rushTDs: 0,
     recYards: 0,
     recTDs: 0,
@@ -138,10 +142,12 @@ function emptySeasonTotals(): SeasonStatTotals {
 function seasonStatLine(pos: Position, t?: SeasonStatTotals) {
   if (!t) return '-'
   if (pos === 'QB' && (t.passYards > 0 || t.passTDs > 0 || t.passAttempts > 0)) {
-    return `${t.passCompletions}/${t.passAttempts}, ${t.passYards} yds, ${t.passTDs} TD, ${t.interceptions} INT${t.rushYards > 0 ? ` · ${t.rushYards} rush yds` : ''}`
+    const rating = passerRating(t.passAttempts, t.passCompletions, t.passYards, t.passTDs, t.interceptions)
+    return `${t.passCompletions}/${t.passAttempts}, ${t.passYards} yds, ${t.passTDs} TD, ${t.interceptions} INT, ${rating.toFixed(1)} rating${t.rushYards > 0 ? ` · ${t.rushYards} rush yds` : ''}`
   }
   if (pos === 'RB' && (t.rushYards > 0 || t.rushTDs > 0 || t.recYards > 0)) {
-    return `${t.rushYards} rush yds, ${t.rushTDs} TD${t.recYards > 0 ? ` · ${t.recYards} rec yds` : ''}`
+    const avg = t.rushAttempts > 0 ? (t.rushYards / t.rushAttempts).toFixed(1) : '0.0'
+    return `${t.rushAttempts} car, ${t.rushYards} yds (${avg} avg), ${t.rushTDs} TD${t.recYards > 0 ? ` · ${t.recYards} rec yds` : ''}`
   }
   if ((pos === 'WR' || pos === 'TE') && (t.recYards > 0 || t.recTDs > 0)) {
     return `${t.receptions} rec, ${t.recYards} yds, ${t.recTDs} TD`
@@ -154,7 +160,7 @@ function seasonStatLine(pos: Position, t?: SeasonStatTotals) {
   }
   if ((pos === 'CB' || pos === 'S') && (t.tackles > 0 || t.yardsAllowed > 0)) {
     const rating = t.passerRatingAllowedGames > 0 ? Math.round(t.passerRatingAllowedSum / t.passerRatingAllowedGames) : 0
-    return `${rating} QBR allowed, ${t.passBreakups} PBU, ${t.defInterceptions} INT, ${t.yardsAllowed} yds allowed`
+    return `${rating} rating allowed, ${t.passBreakups} PBU, ${t.defInterceptions} INT, ${t.yardsAllowed} yds allowed`
   }
   if (pos === 'K' && t.fieldGoalsAttempted > 0) {
     const fgPct = Math.round((t.fieldGoalsMade / t.fieldGoalsAttempted) * 100)
@@ -199,6 +205,7 @@ function RosterView({
     t.passCompletions += s.passCompletions
     t.interceptions += s.interceptions
     t.rushYards += s.rushYards
+    t.rushAttempts += s.rushAttempts
     t.rushTDs += s.rushTDs
     t.recYards += s.recYards
     t.recTDs += s.recTDs
@@ -882,10 +889,12 @@ function ResignView({
 function FreeAgencyView({
   leagueId,
   userTeamId,
+  season,
   onProceedToDraft,
 }: {
   leagueId: number
   userTeamId: number
+  season: number
   onProceedToDraft: () => void
 }) {
   const roster = useLiveQuery(
@@ -953,32 +962,41 @@ function FreeAgencyView({
             <th className="py-1">Pos</th>
             <th className="py-1 text-right">Age</th>
             <th className="py-1 text-right">OVR</th>
+            <th className="py-1 text-right">Asking</th>
             <th className="py-1"></th>
           </tr>
         </thead>
         <tbody>
-          {sorted.map((p) => (
-            <tr key={p.id} className="border-b">
-              <td className="py-1">
-                {p.firstName} {p.lastName}
-              </td>
-              <td className="py-1">{p.position}</td>
-              <td className="py-1 text-right">{p.age}</td>
-              <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
-              <td className="py-1 text-right">
-                <button
-                  onClick={() => handleSign(p.id)}
-                  disabled={signingId === p.id || !needs.includes(p.position)}
-                  className="px-2 py-1 border rounded text-xs disabled:opacity-40"
-                >
-                  {signingId === p.id ? 'Signing...' : 'Sign'}
-                </button>
-              </td>
-            </tr>
-          ))}
+          {sorted.map((p) => {
+            const ask = estimateFreeAgentAsk(season, p)
+            const tooExpensive = ask.salary > capSpace
+            return (
+              <tr key={p.id} className="border-b">
+                <td className="py-1">
+                  {p.firstName} {p.lastName}
+                </td>
+                <td className="py-1">{p.position}</td>
+                <td className="py-1 text-right">{p.age}</td>
+                <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                <td className={`py-1 text-right whitespace-nowrap ${tooExpensive ? 'text-red-400' : ''}`}>
+                  {formatMoney(ask.salary)}/yr &middot; {ask.years}yr
+                </td>
+                <td className="py-1 text-right">
+                  <button
+                    onClick={() => handleSign(p.id)}
+                    disabled={signingId === p.id || !needs.includes(p.position) || tooExpensive}
+                    title={tooExpensive ? 'Not enough cap space' : undefined}
+                    className="px-2 py-1 border rounded text-xs disabled:opacity-40"
+                  >
+                    {signingId === p.id ? 'Signing...' : 'Sign'}
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
           {sorted.length === 0 && (
             <tr>
-              <td colSpan={5} className="text-sm text-gray-500 py-2">
+              <td colSpan={6} className="text-sm text-gray-500 py-2">
                 No free agents available.
               </td>
             </tr>
@@ -1250,6 +1268,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
           <FreeAgencyView
             leagueId={leagueId}
             userTeamId={league.userTeamId}
+            season={league.season}
             onProceedToDraft={() => setTab('league')}
           />
         </>
