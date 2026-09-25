@@ -155,6 +155,23 @@ async function persistBoxScore(
     recYards: b.recYards,
     recTDs: b.recTDs,
     receptions: b.receptions,
+    tackles: b.tackles,
+    sacks: b.sacks,
+    tacklesForLoss: b.tacklesForLoss,
+    passBreakups: b.passBreakups,
+    defInterceptions: b.defInterceptions,
+    yardsAllowed: b.yardsAllowed,
+    passerRatingAllowed: b.passerRatingAllowed,
+    pancakes: b.pancakes,
+    sacksAllowed: b.sacksAllowed,
+    tflsAllowed: b.tflsAllowed,
+    fieldGoalsMade: b.fieldGoalsMade,
+    fieldGoalsAttempted: b.fieldGoalsAttempted,
+    longestFieldGoal: b.longestFieldGoal,
+    extraPointsMade: b.extraPointsMade,
+    extraPointsAttempted: b.extraPointsAttempted,
+    puntCount: b.puntCount,
+    puntYards: b.puntYards,
   }))
   await db.playerGameStats.bulkAdd(rows as never[])
 }

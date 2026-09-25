@@ -99,6 +99,23 @@ export interface PlayerGameStats {
   recYards: number
   recTDs: number
   receptions: number
+  tackles: number
+  sacks: number
+  tacklesForLoss: number
+  passBreakups: number
+  defInterceptions: number
+  yardsAllowed: number
+  passerRatingAllowed: number
+  pancakes: number
+  sacksAllowed: number
+  tflsAllowed: number
+  fieldGoalsMade: number
+  fieldGoalsAttempted: number
+  longestFieldGoal: number
+  extraPointsMade: number
+  extraPointsAttempted: number
+  puntCount: number
+  puntYards: number
 }
 
 export interface ScheduledGame {

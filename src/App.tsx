@@ -17,7 +17,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
-import { rosterNeeds } from './engine/players'
+import { computePositionOverall, computeTeamOverall, rosterNeeds } from './engine/players'
 import { computeConferenceSeeds, computeStandings } from './engine/standings'
 import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
 
@@ -58,6 +58,57 @@ interface SeasonStatTotals {
   recYards: number
   recTDs: number
   receptions: number
+  tackles: number
+  sacks: number
+  tacklesForLoss: number
+  passBreakups: number
+  defInterceptions: number
+  yardsAllowed: number
+  passerRatingAllowedSum: number
+  passerRatingAllowedGames: number
+  pancakes: number
+  sacksAllowed: number
+  tflsAllowed: number
+  fieldGoalsMade: number
+  fieldGoalsAttempted: number
+  longestFieldGoal: number
+  extraPointsMade: number
+  extraPointsAttempted: number
+  puntCount: number
+  puntYards: number
+}
+
+function emptySeasonTotals(): SeasonStatTotals {
+  return {
+    passYards: 0,
+    passTDs: 0,
+    passAttempts: 0,
+    passCompletions: 0,
+    interceptions: 0,
+    rushYards: 0,
+    rushTDs: 0,
+    recYards: 0,
+    recTDs: 0,
+    receptions: 0,
+    tackles: 0,
+    sacks: 0,
+    tacklesForLoss: 0,
+    passBreakups: 0,
+    defInterceptions: 0,
+    yardsAllowed: 0,
+    passerRatingAllowedSum: 0,
+    passerRatingAllowedGames: 0,
+    pancakes: 0,
+    sacksAllowed: 0,
+    tflsAllowed: 0,
+    fieldGoalsMade: 0,
+    fieldGoalsAttempted: 0,
+    longestFieldGoal: 0,
+    extraPointsMade: 0,
+    extraPointsAttempted: 0,
+    puntCount: 0,
+    puntYards: 0,
+  }
 }
 
 function seasonStatLine(pos: Position, t?: SeasonStatTotals) {
@@ -70,6 +121,26 @@ function seasonStatLine(pos: Position, t?: SeasonStatTotals) {
   }
   if ((pos === 'WR' || pos === 'TE') && (t.recYards > 0 || t.recTDs > 0)) {
     return `${t.receptions} rec, ${t.recYards} yds, ${t.recTDs} TD`
+  }
+  if (pos === 'OL' && (t.pancakes > 0 || t.sacksAllowed > 0 || t.tflsAllowed > 0)) {
+    return `${t.pancakes} pancakes, ${t.sacksAllowed} sacks allowed, ${t.tflsAllowed} TFLs allowed`
+  }
+  if ((pos === 'DL' || pos === 'LB') && (t.tackles > 0 || t.sacks > 0)) {
+    return `${t.tackles} tkl, ${t.sacks} sacks, ${t.tacklesForLoss} TFL, ${t.passBreakups + t.defInterceptions} PBU/INT`
+  }
+  if ((pos === 'CB' || pos === 'S') && (t.tackles > 0 || t.yardsAllowed > 0)) {
+    const rating = t.passerRatingAllowedGames > 0 ? Math.round(t.passerRatingAllowedSum / t.passerRatingAllowedGames) : 0
+    return `${rating} QBR allowed, ${t.passBreakups} PBU, ${t.defInterceptions} INT, ${t.yardsAllowed} yds allowed`
+  }
+  if (pos === 'K' && t.fieldGoalsAttempted > 0) {
+    const fgPct = Math.round((t.fieldGoalsMade / t.fieldGoalsAttempted) * 100)
+    const xpPct = t.extraPointsAttempted > 0 ? Math.round((t.extraPointsMade / t.extraPointsAttempted) * 100) : 0
+    return `Long ${t.longestFieldGoal}, ${t.fieldGoalsMade}/${t.fieldGoalsAttempted} FG (${fgPct}%), ${t.extraPointsMade}/${t.extraPointsAttempted} XP (${xpPct}%)`
+  }
+  if (pos === 'P' && t.puntCount > 0) {
+    const avgYards = Math.round(t.puntYards / t.puntCount)
+    const avgFieldPosition = Math.max(1, 100 - avgYards)
+    return `${avgYards} yds/punt avg, opponent starts ~${avgFieldPosition} yd line`
   }
   return '-'
 }
@@ -97,18 +168,7 @@ function RosterView({
 
   const statTotals = new Map<number, SeasonStatTotals>()
   for (const s of stats) {
-    const t = statTotals.get(s.playerId) ?? {
-      passYards: 0,
-      passTDs: 0,
-      passAttempts: 0,
-      passCompletions: 0,
-      interceptions: 0,
-      rushYards: 0,
-      rushTDs: 0,
-      recYards: 0,
-      recTDs: 0,
-      receptions: 0,
-    }
+    const t = statTotals.get(s.playerId) ?? emptySeasonTotals()
     t.passYards += s.passYards
     t.passTDs += s.passTDs
     t.passAttempts += s.passAttempts
@@ -119,6 +179,26 @@ function RosterView({
     t.recYards += s.recYards
     t.recTDs += s.recTDs
     t.receptions += s.receptions
+    t.tackles += s.tackles
+    t.sacks += s.sacks
+    t.tacklesForLoss += s.tacklesForLoss
+    t.passBreakups += s.passBreakups
+    t.defInterceptions += s.defInterceptions
+    t.yardsAllowed += s.yardsAllowed
+    if (s.passerRatingAllowed > 0) {
+      t.passerRatingAllowedSum += s.passerRatingAllowed
+      t.passerRatingAllowedGames += 1
+    }
+    t.pancakes += s.pancakes
+    t.sacksAllowed += s.sacksAllowed
+    t.tflsAllowed += s.tflsAllowed
+    t.fieldGoalsMade += s.fieldGoalsMade
+    t.fieldGoalsAttempted += s.fieldGoalsAttempted
+    t.longestFieldGoal = Math.max(t.longestFieldGoal, s.longestFieldGoal)
+    t.extraPointsMade += s.extraPointsMade
+    t.extraPointsAttempted += s.extraPointsAttempted
+    t.puntCount += s.puntCount
+    t.puntYards += s.puntYards
     statTotals.set(s.playerId, t)
   }
 
@@ -132,6 +212,8 @@ function RosterView({
     list.sort((a, b) => a.depthOrder - b.depthOrder)
   }
 
+  const teamOverall = Math.round(computeTeamOverall(roster))
+
   const handleMove = async (playerId: number, direction: 'up' | 'down') => {
     setMoving(playerId)
     try {
@@ -144,7 +226,7 @@ function RosterView({
   return (
     <div>
       <p className="text-sm text-gray-500 mb-6">
-        {roster.length} players &middot; Cap space {formatMoney(team.capSpace)}
+        {roster.length} players &middot; Team overall {teamOverall} &middot; Cap space {formatMoney(team.capSpace)}
         {roster.some((p) => p.injury) && (
           <> &middot; {roster.filter((p) => p.injury).length} injured</>
         )}
@@ -155,9 +237,12 @@ function RosterView({
         const players = byPosition.get(pos)
         if (!players || players.length === 0) return null
         const isQB = pos === 'QB'
+        const positionOverall = Math.round(computePositionOverall(players))
         return (
           <div key={pos} className="mb-6">
-            <h2 className="text-sm font-semibold text-gray-500 mb-2">{pos}</h2>
+            <h2 className="text-sm font-semibold text-gray-500 mb-2">
+              {pos} <span className="text-gray-600 font-normal">· {positionOverall} OVR</span>
+            </h2>
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="text-left text-gray-400 border-b">
@@ -956,7 +1041,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
     ROUND_ORDER.find((r) => (playoffGamesByRound.get(r)?.length ?? 0) === 0) ?? null
 
   return (
-    <div className="max-w-4xl mx-auto p-8">
+    <div className="max-w-7xl mx-auto p-8">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-semibold">{league.name}</h1>

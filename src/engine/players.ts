@@ -169,6 +169,51 @@ export function nextDepthOrder(existingRoster: { position: Position; depthOrder:
   return atPosition.length === 0 ? 0 : Math.max(...atPosition.map((p) => p.depthOrder)) + 1
 }
 
+// Roughly how many players at each position see meaningful game-day snaps -
+// used to weight a position's contribution to the team-wide overall rating.
+const STARTER_COUNTS: Record<Position, number> = {
+  QB: 1, RB: 2, WR: 3, TE: 1, OL: 5, DL: 4, LB: 3, CB: 3, S: 2, K: 1, P: 1,
+}
+
+/**
+ * A position group's overall isn't a flat average of the whole depth chart -
+ * the starter and the next man up matter far more than the 3rd/4th string
+ * guys who barely see the field. Weights each player's contribution by
+ * depth-chart rank (starter counts full, each rank down counts less).
+ */
+export function computePositionOverall(players: { depthOrder: number; ratings: { overall: number } }[]): number {
+  if (players.length === 0) return 0
+  const sorted = [...players].sort((a, b) => a.depthOrder - b.depthOrder)
+  let weightedSum = 0
+  let weightTotal = 0
+  sorted.forEach((p, i) => {
+    const weight = Math.pow(0.6, i)
+    weightedSum += p.ratings.overall * weight
+    weightTotal += weight
+  })
+  return weightTotal > 0 ? weightedSum / weightTotal : 0
+}
+
+/** Team-wide overall: each position's (starter-weighted) overall, weighted again by how many of that position actually play. */
+export function computeTeamOverall(
+  roster: { position: Position; depthOrder: number; ratings: { overall: number } }[],
+): number {
+  const byPosition = new Map<Position, typeof roster>()
+  for (const p of roster) {
+    const list = byPosition.get(p.position) ?? []
+    list.push(p)
+    byPosition.set(p.position, list)
+  }
+  let sum = 0
+  let weightTotal = 0
+  for (const [position, group] of byPosition) {
+    const weight = STARTER_COUNTS[position] ?? 1
+    sum += computePositionOverall(group) * weight
+    weightTotal += weight
+  }
+  return weightTotal > 0 ? sum / weightTotal : 0
+}
+
 export type TeamOutlook = 'rebuilding' | 'contender' | 'superbowl'
 
 export function classifyTeamOutlook(roster: { ratings: { overall: number } }[]): TeamOutlook {

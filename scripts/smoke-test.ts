@@ -15,7 +15,7 @@ import {
   simWeek,
 } from '../src/engine/league'
 import { computeCapSpace } from '../src/engine/freeAgency'
-import { MIN_OVERALL, rosterNeeds } from '../src/engine/players'
+import { computePositionOverall, computeTeamOverall, MIN_OVERALL, rosterNeeds } from '../src/engine/players'
 import { marketSalary } from '../src/engine/salary'
 import { computeStandings } from '../src/engine/standings'
 import { playerValue } from '../src/engine/trades'
@@ -96,6 +96,44 @@ async function assertSeasonSane(leagueId: number, season: number) {
     `QB stats: ${totalCompletions}/${totalAttempts} completions, ${totalInterceptions} interceptions across the season`,
   )
   console.log('OK: QB accuracy/completion/interception stats recorded')
+
+  const dlLbStats = stats.filter((s) => s.position === 'DL' || s.position === 'LB')
+  const totalTackles = dlLbStats.reduce((s, r) => s + r.tackles, 0)
+  const totalSacks = dlLbStats.reduce((s, r) => s + r.sacks, 0)
+  if (totalTackles === 0) throw new Error('No DL/LB tackles recorded all season')
+  if (totalSacks === 0) throw new Error('No DL/LB sacks recorded all season')
+
+  const olStats = stats.filter((s) => s.position === 'OL')
+  const totalPancakes = olStats.reduce((s, r) => s + r.pancakes, 0)
+  const totalSacksAllowed = olStats.reduce((s, r) => s + r.sacksAllowed, 0)
+  if (totalPancakes === 0) throw new Error('No OL pancake blocks recorded all season')
+  if (totalSacksAllowed !== totalSacks) {
+    throw new Error(`Sacks allowed by OL (${totalSacksAllowed}) should equal sacks recorded by DL/LB (${totalSacks})`)
+  }
+
+  const dbStats = stats.filter((s) => s.position === 'CB' || s.position === 'S')
+  const totalDefInts = dbStats.reduce((s, r) => s + r.defInterceptions, 0)
+  const totalPBUs = dbStats.reduce((s, r) => s + r.passBreakups, 0)
+  const totalOffenseInts = stats.reduce((s, r) => s + r.interceptions, 0)
+  if (totalDefInts !== totalOffenseInts) {
+    throw new Error(`Defensive interceptions (${totalDefInts}) should equal offensive interceptions thrown (${totalOffenseInts})`)
+  }
+  if (totalPBUs === 0) throw new Error('No CB/S pass breakups recorded all season')
+
+  const kStats = stats.filter((s) => s.position === 'K')
+  const totalFGA = kStats.reduce((s, r) => s + r.fieldGoalsAttempted, 0)
+  const totalFGM = kStats.reduce((s, r) => s + r.fieldGoalsMade, 0)
+  if (totalFGA === 0) throw new Error('No kicker field goal attempts recorded all season')
+  if (totalFGM > totalFGA) throw new Error('Field goals made exceeded attempted')
+
+  const pStats = stats.filter((s) => s.position === 'P')
+  const totalPunts = pStats.reduce((s, r) => s + r.puntCount, 0)
+  if (totalPunts === 0) throw new Error('No punts recorded all season')
+
+  console.log(
+    `defense/ST stats: ${totalTackles} tackles, ${totalSacks} sacks, ${totalPancakes} pancakes, ${totalFGM}/${totalFGA} FG, ${totalPunts} punts`,
+  )
+  console.log('OK: defensive line, secondary, and special teams stats are internally consistent')
 
   // Regression test: a team's standings record must count ALL its games, not
   // just games against opponents who are also in the subset passed in (this
@@ -363,6 +401,44 @@ async function main() {
       throw new Error('moveDepthChart did not promote the backup RB to the top of the depth chart')
     }
     console.log('OK: depth chart reordering swaps players correctly')
+  })()
+
+  await (async () => {
+    // Position/team overall should be starter-weighted: swapping a strong
+    // starter to the bottom of the depth chart and a weak backup to the top
+    // should measurably drag the position (and team) overall down, even
+    // though the underlying set of players - and a flat average - is
+    // unchanged.
+    const leagueNow = (await db.leagues.get(leagueId))!
+    if (leagueNow.userTeamId == null) throw new Error('League has no user team')
+    const roster = await db.players.where('teamId').equals(leagueNow.userTeamId).toArray()
+    const wrGroup = roster.filter((p) => p.position === 'WR').sort((a, b) => a.depthOrder - b.depthOrder)
+    if (wrGroup.length < 2) throw new Error('Expected at least 2 WRs to test starter-weighted overall')
+
+    const before = computePositionOverall(wrGroup)
+    const bestId = [...wrGroup].sort((a, b) => b.ratings.overall - a.ratings.overall)[0].id
+    const worstId = [...wrGroup].sort((a, b) => a.ratings.overall - b.ratings.overall)[0].id
+    if (bestId !== worstId) {
+      if (wrGroup[0].id === bestId) await moveDepthChart(leagueNow.userTeamId, bestId, 'down')
+    }
+
+    const rosterAfter = await db.players.where('teamId').equals(leagueNow.userTeamId).toArray()
+    const wrGroupAfter = rosterAfter.filter((p) => p.position === 'WR').sort((a, b) => a.depthOrder - b.depthOrder)
+    const after = computePositionOverall(wrGroupAfter)
+    const flatAverage = wrGroup.reduce((s, p) => s + p.ratings.overall, 0) / wrGroup.length
+
+    console.log(`WR overall: starter-weighted before=${before.toFixed(1)} after-bench-swap=${after.toFixed(1)} flat-average=${flatAverage.toFixed(1)}`)
+    if (before === after) {
+      throw new Error('Position overall did not change after reordering the depth chart - not starter-weighted')
+    }
+    if (Math.abs(before - flatAverage) < 0.01) {
+      throw new Error('Position overall matches a flat average - expected it to be weighted toward starters')
+    }
+
+    const teamOverall = computeTeamOverall(rosterAfter)
+    if (teamOverall <= 0) throw new Error('computeTeamOverall returned a non-positive value')
+    console.log(`team overall (weighted): ${teamOverall.toFixed(1)}`)
+    console.log('OK: position/team overall is starter-weighted, not a flat roster average')
   })()
 
   console.log('OK: season 1 smoke test passed')
