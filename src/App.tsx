@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
 import { db } from './db'
-import { createLeague, regularSeasonWeeks, simWeek } from './engine/league'
+import { createLeague, deleteLeague, regularSeasonWeeks, simWeek } from './engine/league'
 import { computeStandings } from './engine/standings'
 import type { LeaguePhase } from './types'
 
@@ -11,11 +11,12 @@ function simButtonLabel(phase: LeaguePhase, week: number, hasSemis: boolean) {
   return `Sim Week ${week}`
 }
 
-function LeagueHome({ leagueId }: { leagueId: number }) {
+function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => void }) {
   const league = useLiveQuery(() => db.leagues.get(leagueId), [leagueId])
   const teams = useLiveQuery(() => db.teams.toArray(), [])
   const games = useLiveQuery(() => db.games.where({ leagueId }).toArray(), [leagueId])
   const [simming, setSimming] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -28,6 +29,19 @@ function LeagueHome({ leagueId }: { leagueId: number }) {
       await simWeek(leagueId)
     } finally {
       setSimming(false)
+    }
+  }
+
+  const handleReset = async () => {
+    if (!confirm(`Delete "${league?.name ?? 'this league'}" and start over? This cannot be undone.`)) {
+      return
+    }
+    setResetting(true)
+    try {
+      await deleteLeague(leagueId)
+      onReset()
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -53,13 +67,24 @@ function LeagueHome({ leagueId }: { leagueId: number }) {
                 : 'Complete'}
           </p>
         </div>
-        <button
-          onClick={handleSimWeek}
-          disabled={simming || league.phase === 'complete'}
-          className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50"
-        >
-          {simming ? 'Simming...' : simButtonLabel(league.phase, league.week, semiGames.length > 0)}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSimWeek}
+            disabled={simming || league.phase === 'complete'}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50"
+          >
+            {simming
+              ? 'Simming...'
+              : simButtonLabel(league.phase, league.week, semiGames.length > 0)}
+          </button>
+          <button
+            onClick={handleReset}
+            disabled={resetting}
+            className="px-4 py-2 border rounded-md text-sm disabled:opacity-50"
+          >
+            {resetting ? 'Resetting...' : 'Reset League'}
+          </button>
+        </div>
       </div>
 
       {league.phase === 'complete' && league.champTeamId != null && (
@@ -176,7 +201,7 @@ export default function App() {
   const currentLeagueId = activeLeagueId ?? leagues?.[0]?.id ?? null
 
   if (currentLeagueId != null) {
-    return <LeagueHome leagueId={currentLeagueId} />
+    return <LeagueHome leagueId={currentLeagueId} onReset={() => setActiveLeagueId(null)} />
   }
 
   if (leagues == null) return null // still loading

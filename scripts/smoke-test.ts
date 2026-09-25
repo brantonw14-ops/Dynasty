@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { db } from '../src/db'
-import { createLeague, simWeek } from '../src/engine/league'
+import { createLeague, deleteLeague, simWeek } from '../src/engine/league'
 
 async function main() {
   const leagueId = await createLeague('Smoke Test League', 42)
@@ -30,6 +30,33 @@ async function main() {
   if (league.champTeamId == null) throw new Error('No champion set')
 
   console.log('OK: smoke test passed')
+
+  await deleteLeague(leagueId)
+  const remainingLeagues = await db.leagues.count()
+  const remainingTeams = await db.teams.count()
+  const remainingPlayers = await db.players.count()
+  const remainingGames = await db.games.count()
+  const remainingSchedule = await db.schedule.count()
+
+  console.log('after delete:', {
+    remainingLeagues,
+    remainingTeams,
+    remainingPlayers,
+    remainingGames,
+    remainingSchedule,
+  })
+
+  if (
+    remainingLeagues !== 0 ||
+    remainingTeams !== 0 ||
+    remainingPlayers !== 0 ||
+    remainingGames !== 0 ||
+    remainingSchedule !== 0
+  ) {
+    throw new Error('deleteLeague did not fully clean up')
+  }
+
+  console.log('OK: delete cleanup passed')
 }
 
 main().catch((err) => {

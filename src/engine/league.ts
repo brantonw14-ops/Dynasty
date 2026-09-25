@@ -51,6 +51,17 @@ export async function createLeague(name: string, seed = Date.now()) {
   return leagueId as number
 }
 
+export async function deleteLeague(leagueId: number) {
+  await db.transaction('rw', db.leagues, db.teams, db.players, db.games, db.schedule, async () => {
+    const teams = await db.teams.toArray()
+    await db.players.where('teamId').anyOf(teams.map((t) => t.id)).delete()
+    await db.teams.bulkDelete(teams.map((t) => t.id))
+    await db.games.where({ leagueId }).delete()
+    await db.schedule.where({ leagueId }).delete()
+    await db.leagues.delete(leagueId)
+  })
+}
+
 export function regularSeasonWeeks(teamCount: number) {
   return teamCount - 1
 }
