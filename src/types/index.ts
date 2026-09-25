@@ -78,5 +78,6 @@ export interface League {
   week: number
   phase: LeaguePhase
   champTeamId: number | null
+  userTeamId: number | null
   createdAt: number
 }

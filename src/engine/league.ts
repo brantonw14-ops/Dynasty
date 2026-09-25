@@ -9,7 +9,7 @@ import { generateSchedule, type ScheduledGame } from './schedule'
 import { computeStandings } from './standings'
 import { generateTeams } from './teams'
 
-export async function createLeague(name: string, seed = Date.now()) {
+export async function createLeague(name: string, userTeamIndex: number, seed = Date.now()) {
   const rng = createRng(seed)
 
   const leagueId = await db.leagues.add({
@@ -19,6 +19,7 @@ export async function createLeague(name: string, seed = Date.now()) {
     week: 1,
     phase: 'regular',
     champTeamId: null,
+    userTeamId: null,
     createdAt: Date.now(),
   } as never)
 
@@ -33,6 +34,9 @@ export async function createLeague(name: string, seed = Date.now()) {
     const roster = generateRosterForTeam(rng, teamId)
     await db.players.bulkAdd(roster as never[])
   }
+
+  const userTeamId = teamIds[userTeamIndex] ?? teamIds[0]
+  await db.leagues.update(leagueId as number, { userTeamId })
 
   await generateAndStoreSchedule(leagueId as number, teamIds, new Date().getFullYear())
 

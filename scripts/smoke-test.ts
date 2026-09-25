@@ -3,7 +3,7 @@ import { db } from '../src/db'
 import { advanceToNextSeason, createLeague, deleteLeague, simWeek } from '../src/engine/league'
 
 async function main() {
-  const leagueId = await createLeague('Smoke Test League', 42)
+  const leagueId = await createLeague('Smoke Test League', 0, 42)
 
   for (let i = 0; i < 12; i++) {
     const league = await db.leagues.get(leagueId)
