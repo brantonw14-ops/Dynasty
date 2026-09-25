@@ -190,8 +190,12 @@ function generateOffenseBox(
   const receivers = roster.filter((p) => p.position === 'WR' || p.position === 'TE').sort(byDepth)
   const ol = roster.filter((p) => p.position === 'OL').sort(byDepth)
 
-  const totalYards = Math.max(120, Math.round(teamScore * 13 + randNormal(rng, 0, 40)))
-  const passShare = Math.min(0.8, Math.max(0.4, 0.6 + randNormal(rng, 0, 0.08)))
+  // Calibrated against real 2024 NFL per-team-per-game averages: ~337 total
+  // yards, ~224 passing / ~113 rushing, ~21.8 points - so totalYards tracks
+  // team quality (via score) but keeps a real floor even on a bad day,
+  // instead of collapsing toward zero the way a pure score-multiple did.
+  const totalYards = Math.max(180, Math.round(206 + teamScore * 6 + randNormal(rng, 0, 45)))
+  const passShare = Math.min(0.85, Math.max(0.45, 0.665 + randNormal(rng, 0, 0.07)))
   const passYards = Math.round(totalYards * passShare)
   let rushYards = totalYards - passYards
 
@@ -213,9 +217,16 @@ function generateOffenseBox(
     stats.passTDs += passTDs
 
     // QB attributes: attr1=Accuracy, attr2=Decision Making, attr3=Playmaking.
-    // Attempts scale with yardage; completion rate is driven by accuracy.
-    attempts = Math.max(8, Math.round(passYards / 7.5 + randNormal(rng, 0, 3)))
-    const completionRate = clamp01(0.58 + (qb.ratings.attr1 - 68) * 0.006)
+    // Attempts scale with yardage at a real ~6.8 yards/attempt clip (NFL
+    // average), so a normal game lands around 30-35 attempts instead of
+    // the high-teens a too-generous per-attempt figure produced before.
+    // Completion rate also reflects the receivers a QB is throwing to - a
+    // great arm still needs someone to catch the ball.
+    attempts = Math.max(18, Math.round(passYards / 6.8 + randNormal(rng, 0, 3)))
+    const receiverStrength = teamStrength(roster, ['WR', 'TE'])
+    const completionRate = clamp01(
+      0.63 + (qb.ratings.attr1 - 68) * 0.005 + (receiverStrength - 68) * 0.003,
+    )
     completions = Math.min(attempts, Math.max(0, Math.round(attempts * completionRate)))
     stats.passAttempts += attempts
     stats.passCompletions += completions
@@ -252,9 +263,11 @@ function generateOffenseBox(
   )
 
   if (activeRbs.length > 0) {
-    // Yards per carry averages a bit below 4.5 in the real NFL; a little
-    // game-to-game noise keeps it from being a flat constant.
-    const yardsPerCarry = Math.max(3, 4.3 + randNormal(rng, 0, 0.5))
+    // Yards per carry averages a bit below 4.3 in the real NFL, but a run
+    // game is a team effort - a strong offensive line pushes it up, a weak
+    // one drags it down, on top of game-to-game noise.
+    const olStrength = teamStrength(ol, ['OL'])
+    const yardsPerCarry = Math.max(2.5, 4.2 + (olStrength - 68) * 0.035 + randNormal(rng, 0, 0.5))
     const teamRushAttempts = Math.max(8, Math.round(rushYards / yardsPerCarry))
     for (const { player, share } of activeRbs) {
       const stats = statsFor(player)
