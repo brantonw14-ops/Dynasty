@@ -17,6 +17,7 @@ body {
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   background: #0f172a;
   color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
 }
 
 @layer base {
@@ -24,5 +25,42 @@ body {
   ::before,
   ::after {
     border-color: #334155;
+  }
+
+  /* Zebra-striped, hoverable data tables - used everywhere a list of
+     players/picks is shown, so a new player's eye can track a row across
+     a wide table instead of every line blurring together. */
+  table.data-table tbody tr:nth-child(even) {
+    background: rgba(148, 163, 184, 0.04);
+  }
+  table.data-table tbody tr:hover {
+    background: rgba(96, 165, 250, 0.08);
+  }
+  table.data-table thead th {
+    position: sticky;
+    top: 0;
+    background: #0f172a;
+    z-index: 1;
+  }
+
+  /* A dotted-underline label with a native tooltip on hover/focus -
+     explains jargon (OVR, POT, Cap Space, ...) to new players without
+     cluttering the layout. */
+  .info-tip {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    cursor: help;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 6px;
   }
 }

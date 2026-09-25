@@ -100,24 +100,30 @@ function SortHeader({
   sort,
   setSort,
   className = '',
+  tip,
 }: {
   label: string
   sortKey: string
   sort: SortState
   setSort: (s: SortState) => void
   className?: string
+  tip?: string
 }) {
   const active = sort.key === sortKey
   return (
     <th
       className={`py-1 cursor-pointer select-none hover:text-gray-200 ${className}`}
       onClick={() => setSort({ key: sortKey, dir: active && sort.dir === 'desc' ? 'asc' : 'desc' })}
+      title={tip}
     >
-      {label}
+      <span className={tip ? 'info-tip' : ''}>{label}</span>
       {active ? (sort.dir === 'desc' ? ' ▼' : ' ▲') : ''}
     </th>
   )
 }
+
+const OVR_TIP = 'Overall rating - how good this player is right now, 55 (fringe) to 99 (elite).'
+const POT_TIP = 'Potential - the overall this player could grow into with development. Young players usually have a higher POT than OVR.'
 
 /**
  * A "how strong is each position on my team" grid, click a tile to expand
@@ -282,6 +288,58 @@ function formatMoney(n: number) {
   return `$${(n / 1_000_000).toFixed(1)}M`
 }
 
+/** One button in the main League/Roster/Trade/... tab bar - an icon, a label, and an optional numeric badge (used for pending trade offers). */
+function NavTab({
+  icon,
+  label,
+  active,
+  onClick,
+  badge,
+}: {
+  icon: string
+  label: string
+  active: boolean
+  onClick: () => void
+  badge?: number
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-2 rounded-md text-sm flex items-center gap-1.5 transition-colors ${
+        active ? 'bg-blue-600 text-white font-medium' : 'text-gray-400 hover:bg-slate-800 hover:text-gray-200'
+      }`}
+    >
+      <span aria-hidden="true">{icon}</span>
+      {label}
+      {!!badge && badge > 0 && (
+        <span className="inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold">
+          {badge}
+        </span>
+      )}
+    </button>
+  )
+}
+
+/** A one-line reminder of what each main tab is for, shown under the nav bar - aimed at a player who's never seen this screen before. */
+const TAB_DESCRIPTIONS: Record<string, string> = {
+  league: 'Standings, results, and the button to sim the next week or advance the season.',
+  roster: 'Your full roster, depth chart, and contracts - cut, reorder, or extend players here.',
+  gamereport: 'A box score and per-player grades for any game you’ve played, so you can see what actually went wrong (or right).',
+  trade: 'Propose trades with any team, respond to offers sent to you, and check computer-suggested trades that would upgrade your team.',
+  freeagents: 'Unsigned players available to sign right now - sorted by overall so the best players are easy to find.',
+  stats: 'League-wide statistical leaders for the current season.',
+  history: 'Every past season’s champion and final standings.',
+}
+
+/** A dotted-underline label with a native hover/focus tooltip - explains jargon (OVR, POT, Cap Space, ...) inline for new players. */
+function InfoTip({ label, tip }: { label: string; tip: string }) {
+  return (
+    <span className="info-tip" title={tip}>
+      {label}
+    </span>
+  )
+}
+
 /** Tiers a rating (overall/potential) into a consistent color so strong vs. weak players are readable at a glance across every table. */
 function overallColor(n: number) {
   if (n >= 90) return 'text-fuchsia-400'
@@ -425,7 +483,7 @@ function BoxScoreTable({
   return (
     <div>
       <h4 className="text-xs font-semibold text-gray-400 mb-1">{title}</h4>
-      <table className="w-full text-sm border-collapse">
+      <table className="w-full text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
             <th className="py-1 pr-2">Name</th>
@@ -572,7 +630,9 @@ function RosterView({
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <p className="text-sm text-gray-500">
-          {roster.length} players &middot; Team overall {teamOverall} &middot; Cap space {formatMoney(computeCapSpace(roster))}
+          {roster.length} players &middot; Team overall {teamOverall} &middot;{' '}
+          <InfoTip label="Cap space" tip="How much salary you can still add this season before hitting the league salary cap." />{' '}
+          {formatMoney(computeCapSpace(roster))}
           {roster.some((p) => p.injury) && (
             <> &middot; {roster.filter((p) => p.injury).length} injured</>
           )}
@@ -1183,13 +1243,13 @@ function TradeView({
     setSort: (s: SortState) => void,
     showBlockToggle: boolean,
   ) => (
-    <table className="w-full text-sm border-collapse">
+    <table className="w-full text-sm border-collapse data-table">
       <thead>
         <tr className="text-left text-gray-400 border-b">
           <th className="py-1"></th>
           <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} />
           <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} />
-          <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" />
+          <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" tip={OVR_TIP} />
           <SortHeader label="Salary" sortKey="salary" sort={sort} setSort={setSort} className="text-right" />
           {showBlockToggle && <th className="py-1 text-right">Block</th>}
         </tr>
@@ -1411,7 +1471,7 @@ function TradeView({
       )}
 
       <p className="text-sm text-gray-500 mb-2 text-left">
-        Trade with &middot; Your cap space: {formatMoney(myCapSpace)}
+        Trade with &middot; Your <InfoTip label="cap space" tip="How much salary you can still add before hitting the league salary cap." />: {formatMoney(myCapSpace)}
       </p>
       <select
         className="border rounded-md px-3 py-2 text-sm mb-4"
@@ -1569,7 +1629,7 @@ function HistoryView({
   return (
     <div>
       <h2 className="text-lg font-medium mb-2">League History</h2>
-      <table className="w-full text-sm border-collapse">
+      <table className="w-full text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
             <th className="py-1">Season</th>
@@ -1712,7 +1772,7 @@ function StatsLeadersView({
           {cat.rows.length === 0 ? (
             <p className="text-xs text-gray-500">No data yet.</p>
           ) : (
-            <table className="w-full text-sm border-collapse">
+            <table className="w-full text-sm border-collapse data-table">
               <tbody>
                 {cat.rows.map((r, i) => (
                   <tr
@@ -1859,8 +1919,8 @@ function ResignView({
             <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-6 min-w-[11rem]" />
             <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} className="px-2" />
             <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="px-2 text-right" />
-            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="px-2 text-right" />
-            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="px-2 text-right" />
+            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="px-2 text-right" tip={OVR_TIP} />
+            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="px-2 text-right" tip={POT_TIP} />
             <SortHeader label="Grade" sortKey="grade" sort={sort} setSort={setSort} className="px-2 text-right" />
             <th className="py-1 pl-6 text-left">Last Season</th>
             <SortHeader label="Salary" sortKey="salary" sort={sort} setSort={setSort} className="pl-4 pr-2 text-right" />
@@ -2046,7 +2106,9 @@ function FreeAgencyView({
           <span className={rosterShort > 0 ? 'text-orange-400 font-semibold' : 'text-emerald-400 font-semibold'}>
             {roster.length}/{MIN_ROSTER_SIZE}
           </span>{' '}
-          &middot; Cap space {formatMoney(capSpace)} &middot; Needs:{' '}
+          &middot; <InfoTip label="Cap space" tip="How much salary you can still add before hitting the league salary cap." />{' '}
+          {formatMoney(capSpace)} &middot;{' '}
+          <InfoTip label="Needs" tip="Positions below your target roster count at that spot - these are the safest signs to make." />:{' '}
           {needs.length > 0 ? [...new Set(needs)].join(', ') : 'roster full'}
         </p>
         <div className="flex items-center gap-2">
@@ -2089,14 +2151,14 @@ function FreeAgencyView({
         </p>
       )}
 
-      <table className="w-full text-sm border-collapse">
+      <table className="w-full text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
             <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} />
             <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} />
             <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="text-right" />
-            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" />
-            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="text-right" />
+            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="text-right" tip={OVR_TIP} />
+            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="text-right" tip={POT_TIP} />
             <SortHeader label="Asking" sortKey="asking" sort={sort} setSort={setSort} className="text-right" />
             <th className="py-1"></th>
           </tr>
@@ -2307,7 +2369,7 @@ function DraftView({
       )}
 
       {subTab === 'mypicks' ? (
-        <table className="w-full text-sm border-collapse">
+        <table className="w-full text-sm border-collapse data-table">
           <thead>
             <tr className="text-left text-gray-400 border-b">
               <th className="py-1 pr-4">Pick</th>
@@ -2349,14 +2411,14 @@ function DraftView({
           </tbody>
         </table>
       ) : (
-        <table className="w-full text-sm border-collapse">
+        <table className="w-full text-sm border-collapse data-table">
           <thead>
             <tr className="text-left text-gray-400 border-b">
               <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-4" />
               <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} className="pr-4" />
               <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="pr-4 text-right" />
-              <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="pr-4 text-right" />
-              <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="pr-4 text-right" />
+              <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="pr-4 text-right" tip={OVR_TIP} />
+              <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="pr-4 text-right" tip={POT_TIP} />
               <SortHeader label="College" sortKey="college" sort={sort} setSort={setSort} className="pr-4" />
               <th className="py-1 pr-4">College Stats</th>
               <th className="py-1 pr-4">Scouting Report</th>
@@ -2444,7 +2506,7 @@ function StandingsTable({
                   <h3 className="text-xs font-semibold text-gray-500 mb-1">
                     {conf} {div}
                   </h3>
-                  <table className="w-full text-sm border-collapse">
+                  <table className="w-full text-sm border-collapse data-table">
                     <tbody>
                       {standings.map((row) => (
                         <tr
@@ -2506,7 +2568,7 @@ function PlayoffPictureView({
         {CONFERENCES.map((conf) => (
           <div key={conf}>
             <h3 className="text-xs font-semibold text-gray-500 mb-1">{conf} Seeding</h3>
-            <table className="w-full text-sm border-collapse">
+            <table className="w-full text-sm border-collapse data-table">
               <tbody>
                 {seedsByConf[conf].map((s) => (
                   <tr key={s.teamId} className={`border-b ${userRowClass(s.teamId, userTeamId)}`}>
@@ -2557,6 +2619,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [tab, setTab] = useState<'league' | 'roster' | 'gamereport' | 'trade' | 'freeagents' | 'stats' | 'history'>(
     'league',
   )
+  const [showGuide, setShowGuide] = useState(true)
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -2654,6 +2717,30 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
         </div>
       </div>
 
+      {showGuide && (
+        <div className="mb-6 border border-slate-700 rounded-lg p-4 bg-slate-900/60 text-sm">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-gray-200">New to Dynasty? Here's how a season works</h3>
+            <button onClick={() => setShowGuide(false)} className="text-gray-500 hover:text-gray-300 text-xs">
+              Dismiss ✕
+            </button>
+          </div>
+          <ol className="list-decimal list-inside text-gray-400 space-y-1 mb-3">
+            <li><strong className="text-gray-300">Regular season:</strong> hit "Sim Week" to play each week's games and climb the standings.</li>
+            <li><strong className="text-gray-300">Playoffs:</strong> top teams compete for the Super Bowl once the regular season ends.</li>
+            <li><strong className="text-gray-300">Offseason - Resign/Free Agency:</strong> decide which of your own expiring players to keep, then sign new ones. You need a legal 53-man roster to move on.</li>
+            <li><strong className="text-gray-300">Draft:</strong> pick rookies to build for the future - or hit "Sim Rest of Draft" if you just want to see who lands where.</li>
+          </ol>
+          <p className="text-gray-500">
+            Quick glossary: <InfoTip label="OVR" tip={OVR_TIP} /> is how good a player is right now &middot;{' '}
+            <InfoTip label="POT" tip={POT_TIP} /> is their ceiling with development &middot;{' '}
+            <InfoTip label="Cap space" tip="How much salary you can still add before hitting the league salary cap." /> is
+            the money you have left to sign or trade for players. Check the <strong className="text-gray-300">Trade</strong> tab
+            regularly - it auto-suggests trades that would upgrade your team.
+          </p>
+        </div>
+      )}
+
       {league.phase === 'complete' && league.champTeamId != null && (
         <div className="mb-6 border border-amber-700 rounded-md px-4 py-3 bg-amber-900/40 text-amber-200 text-sm font-medium">
           🏆 {teamName(league.champTeamId)} won the Super Bowl!
@@ -2689,77 +2776,30 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
         </>
       ) : (
         <>
-          <div className="flex gap-4 border-b mb-6">
-            <button
-              onClick={() => setTab('league')}
-              className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-                tab === 'league' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-              }`}
-            >
-              League
-            </button>
+          <div className="flex flex-wrap gap-1.5 bg-slate-900/60 border border-slate-800 rounded-lg p-1.5 mb-2">
+            <NavTab icon="🏆" label="League" active={tab === 'league'} onClick={() => setTab('league')} />
             {league.userTeamId != null && (
-              <button
-                onClick={() => setTab('roster')}
-                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-                  tab === 'roster' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-                }`}
-              >
-                My Roster
-              </button>
+              <NavTab icon="👥" label="My Roster" active={tab === 'roster'} onClick={() => setTab('roster')} />
             )}
             {league.userTeamId != null && (
-              <button
-                onClick={() => setTab('gamereport')}
-                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-                  tab === 'gamereport' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-                }`}
-              >
-                Game Report
-              </button>
+              <NavTab icon="📊" label="Game Report" active={tab === 'gamereport'} onClick={() => setTab('gamereport')} />
             )}
             {league.userTeamId != null && (
-              <button
+              <NavTab
+                icon="🔄"
+                label="Trade"
+                active={tab === 'trade'}
                 onClick={() => setTab('trade')}
-                className={`px-1 py-2 text-sm border-b-2 -mb-px flex items-center gap-1.5 ${
-                  tab === 'trade' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-                }`}
-              >
-                Trade
-                {(league.pendingTradeOffers?.length ?? 0) > 0 && (
-                  <span className="inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-blue-600 text-white text-[10px] font-semibold">
-                    {league.pendingTradeOffers?.length}
-                  </span>
-                )}
-              </button>
+                badge={league.pendingTradeOffers?.length}
+              />
             )}
             {league.userTeamId != null && (
-              <button
-                onClick={() => setTab('freeagents')}
-                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-                  tab === 'freeagents' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-                }`}
-              >
-                Free Agents
-              </button>
+              <NavTab icon="🆓" label="Free Agents" active={tab === 'freeagents'} onClick={() => setTab('freeagents')} />
             )}
-            <button
-              onClick={() => setTab('stats')}
-              className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-                tab === 'stats' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-              }`}
-            >
-              Stat Leaders
-            </button>
-            <button
-              onClick={() => setTab('history')}
-              className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-                tab === 'history' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-              }`}
-            >
-              History
-            </button>
+            <NavTab icon="📈" label="Stat Leaders" active={tab === 'stats'} onClick={() => setTab('stats')} />
+            <NavTab icon="📜" label="History" active={tab === 'history'} onClick={() => setTab('history')} />
           </div>
+          <p className="text-xs text-gray-500 mb-6">{TAB_DESCRIPTIONS[tab] ?? ''}</p>
 
           {tab === 'roster' && league.userTeamId != null && (
             <RosterView teamId={league.userTeamId} leagueId={leagueId} season={league.season} editable />
