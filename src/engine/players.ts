@@ -1,4 +1,5 @@
 import type { Player, Position, Ratings } from '../types'
+import { POSITION_AGE_PROFILE } from './ages'
 import { randomName } from './names'
 import { randInt, randNormal, type Rng } from './rng'
 import { SALARY_CAP } from './teams'
@@ -124,7 +125,19 @@ export function generatePlayer(
   strength?: TeamStrength,
 ): Omit<Player, 'id'> {
   const { firstName, lastName } = randomName(rng)
-  const age = clamp(randInt(rng, 21, 33) + Math.round(strength?.ageOffset ?? 0), 21, 38)
+  // A fresh roster's age spread should already look like the position and
+  // like a real roster's pyramid shape - mostly players in their early-to-
+  // mid 20s with a shrinking tail of veterans, not an even spread up to
+  // the position's retirement age (which would start the league with an
+  // unrealistic wave of players already near retirement). Squaring the
+  // random draw skews it toward the young end; the ceiling itself is well
+  // below where retirement odds start climbing, so day-one rosters aren't
+  // already sitting on the retirement cliff.
+  const { averageRetirement, maxAge } = POSITION_AGE_PROFILE[position]
+  const ageCeiling = Math.min(averageRetirement - 1, maxAge)
+  const span = Math.max(1, ageCeiling - 21)
+  const skewedAge = 21 + Math.floor(Math.pow(rng(), 1.8) * (span + 1))
+  const age = clamp(Math.min(skewedAge, ageCeiling) + Math.round(strength?.ageOffset ?? 0), 21, maxAge)
   const ratings = generateRatings(rng, strength?.ratingOffset ?? 0)
   return {
     firstName,

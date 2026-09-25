@@ -14,6 +14,7 @@ import {
   signFreeAgent,
   simWeek,
 } from '../src/engine/league'
+import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
 import { computePositionOverall, computeTeamOverall, MIN_OVERALL, rosterNeeds } from '../src/engine/players'
 import { marketSalary } from '../src/engine/salary'
@@ -223,6 +224,27 @@ async function main() {
       }
     }
     console.log('OK: team preview exactly matches actual generated rosters for the same seed')
+  })()
+
+  await (async () => {
+    // No player should ever be generated above their position's realistic
+    // max age, and the fresh-league age spread shouldn't already be
+    // sitting on the retirement cliff - a real regression here generated
+    // ages uniformly up toward each position's *average* retirement age,
+    // which caused roughly a third of the league to retire in year one.
+    const allPlayers = await db.players.toArray()
+    for (const p of allPlayers) {
+      const { maxAge } = POSITION_AGE_PROFILE[p.position]
+      if (p.age > maxAge) {
+        throw new Error(`Player ${p.id} (${p.position}) generated at age ${p.age}, above position max ${maxAge}`)
+      }
+    }
+    const avgAge = allPlayers.reduce((s, p) => s + p.age, 0) / allPlayers.length
+    console.log(`fresh league average player age: ${avgAge.toFixed(1)}`)
+    if (avgAge < 20 || avgAge > 28) {
+      throw new Error(`Fresh league average age (${avgAge.toFixed(1)}) looks unrealistic (expected ~22-26)`)
+    }
+    console.log('OK: generated ages respect position max age and look like a fresh (young) league')
   })()
 
   await (async () => {
@@ -463,6 +485,14 @@ async function main() {
     'returning players changed overall rating',
   )
   if (changed.length === 0) throw new Error('No player ratings changed during progression')
+
+  // The first-ever offseason of a fresh (young) league shouldn't retire a
+  // huge chunk of the roster - regression check for the age-generation bug
+  // above (mass early retirements should never exceed a sane ceiling).
+  const retirementRate = faResult.retiredCount / rosterCountBefore
+  if (retirementRate > 0.2) {
+    throw new Error(`First-season retirement rate (${(retirementRate * 100).toFixed(1)}%) is unrealistically high`)
+  }
 
   const leagueInResign = await db.leagues.get(leagueId)
   console.log('free agency:', faResult)
