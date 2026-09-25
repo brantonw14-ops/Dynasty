@@ -12,6 +12,9 @@ export const ROSTER_SHAPE: Record<Position, number> = {
   QB: 3, RB: 4, WR: 6, TE: 3, OL: 9, DL: 8, LB: 7, CB: 6, S: 4, K: 1, P: 1,
 }
 
+/** A real NFL team must carry a 53-man active roster to start the season. */
+export const MIN_ROSTER_SIZE = 53
+
 export function rosterNeeds(roster: Player[]): Position[] {
   const counts: Partial<Record<Position, number>> = {}
   for (const p of roster) counts[p.position] = (counts[p.position] ?? 0) + 1

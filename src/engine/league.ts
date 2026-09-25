@@ -21,6 +21,7 @@ import {
   classifyTeamOutlook,
   generateRosterForTeam,
   generateStreetFreeAgents,
+  MIN_ROSTER_SIZE,
   nextDepthOrder,
   rosterNeeds,
   type TeamOutlook,
@@ -711,10 +712,53 @@ export function ownedPicks(
  * the draft screen opens right on the user's first turn (or fully resolves
  * and rolls into the regular season if the user has no team).
  */
+/**
+ * Fills the user's roster up to a legal 53-man active roster by signing the
+ * cheapest available free agents - a real team can't take the field short,
+ * so this exists as the escape hatch when the user skips resigning/signing
+ * on their own. Doesn't respect rosterNeeds (a forced fill may go over a
+ * position's normal target count) or asking-price odds - just grabs whoever
+ * is cheapest so it fits under the cap as often as possible.
+ */
+export async function autoFillRoster(leagueId: number): Promise<{ added: number }> {
+  const league = await db.leagues.get(leagueId)
+  if (!league || league.userTeamId == null) return { added: 0 }
+
+  let roster = await db.players.where('teamId').equals(league.userTeamId).toArray()
+  const shortfall = MIN_ROSTER_SIZE - roster.length
+  if (shortfall <= 0) return { added: 0 }
+
+  const freeAgents = (await db.players.toArray())
+    .filter((p) => p.teamId === null)
+    .map((p) => ({ p, salary: Math.round(marketSalary(p.position, p.ratings.overall, p.age) * 0.9) }))
+    .sort((a, b) => a.salary - b.salary)
+
+  const signed: Player[] = []
+  let capSpace = computeCapSpace(roster)
+  for (const { p, salary } of freeAgents) {
+    if (signed.length >= shortfall) break
+    if (salary > capSpace) continue
+    signed.push({ ...p, teamId: league.userTeamId, contract: { salary, yearsLeft: 1 }, depthOrder: nextDepthOrder(roster, p.position) })
+    roster = [...roster, signed[signed.length - 1]]
+    capSpace -= salary
+  }
+
+  if (signed.length > 0) await db.players.bulkPut(signed as never[])
+  return { added: signed.length }
+}
+
 export async function beginDraft(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
   if (league.phase !== 'freeagency') throw new Error('Not in the free agency window')
+  if (league.userTeamId != null) {
+    const rosterSize = await db.players.where('teamId').equals(league.userTeamId).count()
+    if (rosterSize < MIN_ROSTER_SIZE) {
+      throw new Error(
+        `Your roster has only ${rosterSize} players - you need at least ${MIN_ROSTER_SIZE} to start the season. Sign more free agents or use Auto-Fill Roster.`,
+      )
+    }
+  }
 
   const rng = createRng(league.season * 7919 + 2)
   const teams = await db.teams.toArray()
@@ -1012,7 +1056,7 @@ export async function proposeTrade(
   return evaluation
 }
 
-function wouldFitUnderCap(roster: Player[], leavingIds: number[], entering: Player[]): boolean {
+export function wouldFitUnderCap(roster: Player[], leavingIds: number[], entering: Player[]): boolean {
   const leavingSet = new Set(leavingIds)
   const resulting = [...roster.filter((p) => !leavingSet.has(p.id)), ...entering]
   const capUsed = resulting.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
@@ -1069,18 +1113,22 @@ export async function generateTradeOffers(leagueId: number) {
   const pending = league.pendingTradeOffers ?? []
   if (pending.length >= 3) return
 
-  const blockPlayers = await db.players
-    .where('teamId')
-    .equals(league.userTeamId)
-    .and((p) => p.onTradeBlock === true)
-    .toArray()
-  if (blockPlayers.length === 0) return
+  const myRoster = await db.players.where('teamId').equals(league.userTeamId).toArray()
+  const blockPlayers = myRoster.filter((p) => p.onTradeBlock === true)
+  // Trade-block players are the strongest signal (the user explicitly said
+  // "shop this guy"), but AI teams should still occasionally come calling
+  // on players that aren't blocked - real GMs call about players who
+  // aren't on the block too. Falls back to the whole roster at lower odds.
+  const candidatePool = blockPlayers.length > 0 ? blockPlayers : myRoster
+  if (candidatePool.length === 0) return
 
   const rng = createRng(league.season * 104729 + league.week)
-  if (rng() > 0.5) return // not every week produces an offer
+  const offerChance = blockPlayers.length > 0 ? 0.5 : 0.3
+  if (rng() > offerChance) return // not every week produces an offer
 
   const alreadyOffered = new Set(pending.map((o) => o.requestPlayerIds[0]))
-  const target = blockPlayers.find((p) => !alreadyOffered.has(p.id))
+  const eligible = candidatePool.filter((p) => !alreadyOffered.has(p.id))
+  const target = eligible[Math.floor(rng() * eligible.length)]
   if (!target) return
 
   const teams = await db.teams.toArray()
@@ -1215,6 +1263,82 @@ export async function removeTradeOffer(leagueId: number, offerId: number) {
   await db.leagues.update(leagueId, {
     pendingTradeOffers: (league.pendingTradeOffers ?? []).filter((o) => o.id !== offerId),
   })
+}
+
+export interface SuggestedTrade {
+  otherTeamId: number
+  giveIds: number[]
+  getIds: number[]
+  reason: string
+}
+
+/**
+ * Scans every AI team's roster for a one-for-one deal that would genuinely
+ * upgrade the user's team (fills a need or clearly beats their current
+ * starter at that spot) and that the AI side would actually say yes to
+ * (runs the same evaluateTrade fairness check proposeTrade uses, from the
+ * AI's own side - it never suggests a deal the AI wouldn't take). Meant to
+ * surface as a one-click "Make this trade" list, not something the user has
+ * to hunt for manually.
+ */
+export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<SuggestedTrade[]> {
+  const league = await db.leagues.get(leagueId)
+  if (!league || league.userTeamId == null) return []
+
+  const teams = await db.teams.toArray()
+  const myRoster = await db.players.where('teamId').equals(league.userTeamId).toArray()
+  const myNeeds = new Set(rosterNeeds(myRoster))
+  const myByPosition = new Map<Position, Player[]>()
+  for (const p of myRoster) {
+    const list = myByPosition.get(p.position) ?? []
+    list.push(p)
+    myByPosition.set(p.position, list)
+  }
+
+  const suggestions: SuggestedTrade[] = []
+  for (const team of teams) {
+    if (team.id === league.userTeamId) continue
+    if (suggestions.length >= limit) break
+
+    const theirRoster = await db.players.where('teamId').equals(team.id).toArray()
+    const theirNeeds = new Set(rosterNeeds(theirRoster))
+
+    const theirCandidates = [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15)
+    for (const theirs of theirCandidates) {
+      if (suggestions.length >= limit) break
+      const myBest = (myByPosition.get(theirs.position) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+      const wouldUpgrade = myNeeds.has(theirs.position) || !myBest || theirs.ratings.overall > myBest.ratings.overall + 4
+      if (!wouldUpgrade) continue
+
+      // Offer from my own surplus - positions I'm not short on, cheapest
+      // players first so the ask stays modest - skipping anything I'd need
+      // more than I need the upgrade itself.
+      const mySurplus = myRoster
+        .filter((p) => p.id !== myBest?.id && !myNeeds.has(p.position))
+        .sort((a, b) => playerValue(a) - playerValue(b))
+
+      for (const give of mySurplus) {
+        const evaluation = evaluateTrade(theirRoster, [theirs], [give])
+        if (!evaluation.accepted) continue
+        if (!wouldFitUnderCap(myRoster, [give.id], [theirs])) continue
+        // Skip deals the AI would take but that would leave them thin at a
+        // position they actually need - not realistic even if "fair" by value.
+        if (theirNeeds.has(theirs.position)) continue
+
+        suggestions.push({
+          otherTeamId: team.id,
+          giveIds: [give.id],
+          getIds: [theirs.id],
+          reason: myNeeds.has(theirs.position)
+            ? `Fills your need at ${theirs.position}`
+            : `Upgrade at ${theirs.position} (${theirs.ratings.overall} OVR vs your ${myBest?.ratings.overall ?? 0})`,
+        })
+        break
+      }
+    }
+  }
+
+  return suggestions
 }
 
 export interface SeasonHistoryEntry {

@@ -3,11 +3,13 @@ import { db } from '../src/db'
 import {
   acceptTradeOffer,
   advanceToFreeAgency,
+  autoFillRoster,
   beginDraft,
   createLeague,
   cutPlayer,
   deleteLeague,
   DRAFT_ROUNDS,
+  findSuggestedTrades,
   generateTradeOffers,
   getDraftBoard,
   getSeasonHistory,
@@ -29,7 +31,7 @@ import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
 import { buildGameReasons, classifyGamePerformance } from '../src/engine/gameReport'
 import { passerRating } from '../src/engine/gameSim'
-import { computePositionOverall, computeTeamOverall, MIN_OVERALL, rosterNeeds } from '../src/engine/players'
+import { computePositionOverall, computeTeamOverall, MIN_OVERALL, MIN_ROSTER_SIZE, rosterNeeds } from '../src/engine/players'
 import { marketSalary } from '../src/engine/salary'
 import { gradeSeasonPerformance } from '../src/engine/seasonPerformance'
 import { computeStandings } from '../src/engine/standings'
@@ -531,6 +533,28 @@ async function main() {
     }
   })()
 
+  await (async () => {
+    // Suggested trades: whatever comes back must actually be a deal the AI
+    // side would take (evaluateTrade-accepted) and must fit the user's cap.
+    const suggestions = await findSuggestedTrades(leagueId, 5)
+    console.log(`suggested trades: ${suggestions.length} candidate(s)`)
+    const usedGiveIds = new Set<number>()
+    let checked = 0
+    for (const s of suggestions) {
+      if (s.giveIds.length === 0 || s.getIds.length === 0) throw new Error('Suggested trade has an empty side')
+      // A player already traded away by an earlier suggestion this loop
+      // isn't a fresh failure of the feature - skip instead of asserting.
+      if (s.giveIds.some((id) => usedGiveIds.has(id))) continue
+      const outcome = await proposeTrade(leagueId, (await db.leagues.get(leagueId))!.userTeamId!, s.otherTeamId, s.giveIds, s.getIds)
+      if (!outcome.accepted) {
+        throw new Error(`Suggested trade was not actually acceptable when proposed: ${outcome.reason}`)
+      }
+      s.giveIds.forEach((id) => usedGiveIds.add(id))
+      checked++
+    }
+    console.log(`OK: findSuggestedTrades only returns deals the AI side actually accepts (${checked} executed)`)
+  })()
+
   await playSeason(leagueId)
 
   const league = await db.leagues.get(leagueId)
@@ -897,7 +921,31 @@ async function main() {
   console.log('OK: signed a free agent to the user team')
 
   const rosterCountBeforeDraft = await db.players.count()
-  const userIdsBeforeDraft = new Set((await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()).map((p) => p.id))
+
+  // beginDraft must refuse to start the season with an illegal (<53) active
+  // roster - confirm the guard actually fires, then use autoFillRoster (the
+  // in-app escape hatch) to legally top it off and confirm it does.
+  const userRosterPreFill = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
+  if (userRosterPreFill.length >= MIN_ROSTER_SIZE) {
+    throw new Error('Expected the user roster to be under 53 at this point in the smoke test setup')
+  }
+  let threwForShortRoster = false
+  try {
+    await beginDraft(leagueId)
+  } catch {
+    threwForShortRoster = true
+  }
+  if (!threwForShortRoster) throw new Error('beginDraft should reject a sub-53-man roster')
+  console.log(`OK: beginDraft rejects a ${userRosterPreFill.length}-man roster (below the ${MIN_ROSTER_SIZE}-man minimum)`)
+
+  const { added } = await autoFillRoster(leagueId)
+  const userRosterPostFill = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
+  if (userRosterPostFill.length < MIN_ROSTER_SIZE) {
+    throw new Error(`autoFillRoster only reached ${userRosterPostFill.length}/${MIN_ROSTER_SIZE} players (added ${added})`)
+  }
+  console.log(`OK: autoFillRoster topped the user roster up to ${userRosterPostFill.length}/${MIN_ROSTER_SIZE} players`)
+
+  const userIdsBeforeDraft = new Set(userRosterPostFill.map((p) => p.id))
   await beginDraft(leagueId)
 
   // Drive the interactive draft to completion: whenever it's the user's

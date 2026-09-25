@@ -4,11 +4,13 @@ import { db } from './db'
 import {
   acceptTradeOffer,
   advanceToFreeAgency,
+  autoFillRoster,
   beginDraft,
   createLeague,
   cutPlayer,
   deleteLeague,
   estimateFreeAgentAsk,
+  findSuggestedTrades,
   getDraftBoard,
   getSeasonHistory,
   makeUserDraftPick,
@@ -24,6 +26,7 @@ import {
   simRestOfDraft,
   simWeek,
   toggleTradeBlock,
+  type SuggestedTrade,
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
@@ -31,6 +34,7 @@ import { buildGameReasons, classifyGamePerformance, performanceBlurb } from './e
 import {
   computePositionOverall,
   computeTeamOverall,
+  MIN_ROSTER_SIZE,
   POSITION_ATTRIBUTES,
   rosterNeeds,
   STARTER_COUNTS,
@@ -225,7 +229,7 @@ function TeamPositionPanel({
                       {p.firstName} {p.lastName}
                     </td>
                     <td className="py-1 pr-4 text-right">{p.age}</td>
-                    <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                    <td className={`py-1 pr-4 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
                     <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                     <td className="py-1 pr-4 text-right whitespace-nowrap">
                       {p.contract ? formatMoney(p.contract.salary) : '-'}
@@ -276,6 +280,15 @@ function sortRows<T>(
 
 function formatMoney(n: number) {
   return `$${(n / 1_000_000).toFixed(1)}M`
+}
+
+/** Tiers a rating (overall/potential) into a consistent color so strong vs. weak players are readable at a glance across every table. */
+function overallColor(n: number) {
+  if (n >= 90) return 'text-fuchsia-400'
+  if (n >= 80) return 'text-emerald-400'
+  if (n >= 70) return 'text-cyan-400'
+  if (n >= 60) return 'text-gray-300'
+  return 'text-orange-400'
 }
 
 /** Short column-header abbreviation for a position attribute label, e.g. "Route Running" -> "RR", "Speed" -> "SPD". */
@@ -1064,6 +1077,10 @@ function TradeView({
   const [giveSort, setGiveSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
   const [getSort, setGetSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
   const [respondingOfferId, setRespondingOfferId] = useState<number | null>(null)
+  const [makingSuggestionKey, setMakingSuggestionKey] = useState<string | null>(null)
+  const [suggestionResult, setSuggestionResult] = useState<{ key: string; accepted: boolean; reason: string } | null>(null)
+
+  const suggestedTrades = useLiveQuery(() => findSuggestedTrades(leagueId), [leagueId, myRoster])
 
   const otherRoster = useLiveQuery(
     (): Promise<Player[]> =>
@@ -1143,6 +1160,17 @@ function TradeView({
     }
   }
 
+  const handleMakeSuggestion = async (s: SuggestedTrade, key: string) => {
+    setMakingSuggestionKey(key)
+    setSuggestionResult(null)
+    try {
+      const outcome = await proposeTrade(leagueId, userTeamId, s.otherTeamId, s.giveIds, s.getIds)
+      setSuggestionResult({ key, accepted: outcome.accepted, reason: outcome.reason })
+    } finally {
+      setMakingSuggestionKey(null)
+    }
+  }
+
   const renderRoster = (
     roster: Player[],
     selected: Set<number>,
@@ -1189,7 +1217,7 @@ function TradeView({
               )}
             </td>
             <td className="py-1">{p.position}</td>
-            <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+            <td className={`py-1 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
             <td className="py-1 text-right whitespace-nowrap">{p.contract ? formatMoney(p.contract.salary) : '-'}</td>
             {showBlockToggle && (
               <td className="py-1 text-right">
@@ -1261,6 +1289,48 @@ function TradeView({
 
   return (
     <div>
+      {suggestedTrades && suggestedTrades.length > 0 && (
+        <div className="mb-6 border border-emerald-800 rounded p-3 bg-emerald-950/30">
+          <h3 className="text-sm font-semibold text-emerald-300 mb-2">
+            Suggested Trades for You ({suggestedTrades.length})
+          </h3>
+          <div className="flex flex-col gap-2">
+            {suggestedTrades.map((s) => {
+              const key = `${s.otherTeamId}-${s.giveIds[0]}-${s.getIds[0]}`
+              const giveP = myRoster.find((p) => p.id === s.giveIds[0])
+              return (
+                <div key={key} className="flex items-center justify-between gap-3 text-xs border-b border-emerald-900 pb-2 last:border-0 last:pb-0">
+                  <div>
+                    <span className="text-emerald-300 font-medium">{teamName(s.otherTeamId)}</span>
+                    <span className="text-gray-400"> &middot; {s.reason}</span>
+                    {giveP && (
+                      <span className="text-gray-500">
+                        {' '}
+                        &middot; you send {giveP.firstName} {giveP.lastName} ({giveP.position})
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {suggestionResult?.key === key && (
+                      <span className={suggestionResult.accepted ? 'text-emerald-400' : 'text-red-400'}>
+                        {suggestionResult.accepted ? 'Done!' : suggestionResult.reason}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => handleMakeSuggestion(s, key)}
+                      disabled={makingSuggestionKey === key}
+                      className="px-2 py-1 bg-emerald-600 text-white rounded text-[11px] disabled:opacity-50"
+                    >
+                      {makingSuggestionKey === key ? 'Trading...' : 'Make Trade'}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {pendingOffers.length > 0 && (
         <div className="mb-6 border border-blue-800 rounded p-3 bg-blue-950/30">
           <h3 className="text-sm font-semibold text-blue-300 mb-2">Incoming Trade Offers ({pendingOffers.length})</h3>
@@ -1760,7 +1830,7 @@ function ResignView({
                 </td>
                 <td className="py-1 px-2">{p.position}</td>
                 <td className="py-1 px-2 text-right">{p.age}</td>
-                <td className="py-1 px-2 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                <td className={`py-1 px-2 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
                 <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                 <td className={`py-1 px-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-600'}`}>
                   {grade ?? '-'}
@@ -1842,6 +1912,7 @@ function FreeAgencyView({
   const [signingId, setSigningId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [advancing, setAdvancing] = useState(false)
+  const [autoFilling, setAutoFilling] = useState(false)
   const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
   const [positionFilter, setPositionFilter] = useState<Position | null>(null)
 
@@ -1849,6 +1920,7 @@ function FreeAgencyView({
 
   const needs = rosterNeeds(roster)
   const capSpace = computeCapSpace(roster)
+  const rosterShort = MIN_ROSTER_SIZE - roster.length
 
   const filtered = positionFilter ? freeAgents.filter((p) => p.position === positionFilter) : freeAgents
   const sorted = sortRows(
@@ -1878,12 +1950,30 @@ function FreeAgencyView({
   }
 
   const handleProceed = async () => {
+    setError(null)
     setAdvancing(true)
     try {
       await beginDraft(leagueId)
       onProceedToDraft()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setAdvancing(false)
+    }
+  }
+
+  const handleAutoFill = async () => {
+    setError(null)
+    setAutoFilling(true)
+    try {
+      const { added } = await autoFillRoster(leagueId)
+      if (added < rosterShort) {
+        setError(
+          `Signed ${added} player${added === 1 ? '' : 's'}, but couldn't fully fill the roster under the cap - cut a costlier player or try again next week.`,
+        )
+      }
+    } finally {
+      setAutoFilling(false)
     }
   }
 
@@ -1891,20 +1981,41 @@ function FreeAgencyView({
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-gray-500">
-          Cap space {formatMoney(capSpace)} &middot; Needs:{' '}
+          Roster{' '}
+          <span className={rosterShort > 0 ? 'text-orange-400 font-semibold' : 'text-emerald-400 font-semibold'}>
+            {roster.length}/{MIN_ROSTER_SIZE}
+          </span>{' '}
+          &middot; Cap space {formatMoney(capSpace)} &middot; Needs:{' '}
           {needs.length > 0 ? [...new Set(needs)].join(', ') : 'roster full'}
         </p>
-        {showDraftButton && (
-          <button
-            onClick={handleProceed}
-            disabled={advancing}
-            className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50"
-          >
-            {advancing ? 'Starting draft...' : 'Enter the Draft'}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {rosterShort > 0 && (
+            <button
+              onClick={handleAutoFill}
+              disabled={autoFilling}
+              className="px-3 py-2 bg-orange-600 text-white rounded-md text-sm disabled:opacity-50"
+            >
+              {autoFilling ? 'Signing...' : `Auto-Fill Roster (+${rosterShort})`}
+            </button>
+          )}
+          {showDraftButton && (
+            <button
+              onClick={handleProceed}
+              disabled={advancing}
+              className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50"
+            >
+              {advancing ? 'Starting draft...' : 'Enter the Draft'}
+            </button>
+          )}
+        </div>
       </div>
 
+      {rosterShort > 0 && (
+        <p className="text-sm text-orange-400 mb-3">
+          You need at least {MIN_ROSTER_SIZE} players to start the season - {rosterShort} short. Sign free agents
+          below or use Auto-Fill Roster.
+        </p>
+      )}
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
 
       <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} onSelectPosition={setPositionFilter} />
@@ -1940,7 +2051,7 @@ function FreeAgencyView({
                 </td>
                 <td className="py-1">{p.position}</td>
                 <td className="py-1 text-right">{p.age}</td>
-                <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                <td className={`py-1 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
                 <td className="py-1 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                 <td className={`py-1 text-right whitespace-nowrap ${tooExpensive ? 'text-red-400' : ''}`}>
                   {formatMoney(ask.salary)}/yr &middot; {ask.years}yr
@@ -2161,7 +2272,7 @@ function DraftView({
                   </td>
                   <td className="py-1 pr-4">{prospect.position}</td>
                   <td className="py-1 pr-4 text-right">{prospect.age}</td>
-                  <td className="py-1 pr-4 text-right text-green-400 font-semibold">{prospect.ratings.overall}</td>
+                  <td className={`py-1 pr-4 text-right ${overallColor(prospect.ratings.overall)} font-semibold`}>{prospect.ratings.overall}</td>
                   <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{prospect.ratings.potential}</td>
                   <td className="py-1 pr-4 whitespace-nowrap">{prospect.college}</td>
                 </tr>
@@ -2206,7 +2317,7 @@ function DraftView({
                     )}
                   </td>
                   <td className="py-1 pr-4 text-right">{p.age}</td>
-                  <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                  <td className={`py-1 pr-4 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
                   <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                   <td className="py-1 pr-4 whitespace-nowrap">
                     {p.college}
@@ -2549,11 +2660,16 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             {league.userTeamId != null && (
               <button
                 onClick={() => setTab('trade')}
-                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                className={`px-1 py-2 text-sm border-b-2 -mb-px flex items-center gap-1.5 ${
                   tab === 'trade' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
                 }`}
               >
                 Trade
+                {(league.pendingTradeOffers?.length ?? 0) > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-blue-600 text-white text-[10px] font-semibold">
+                    {league.pendingTradeOffers?.length}
+                  </span>
+                )}
               </button>
             )}
             {league.userTeamId != null && (
