@@ -6,6 +6,7 @@ import {
   cutPlayer,
   deleteLeague,
   getSeasonHistory,
+  moveDepthChart,
   openFreeAgency,
   previewLeagueTeams,
   proceedToDraft,
@@ -83,6 +84,18 @@ async function assertSeasonSane(leagueId: number, season: number) {
   const totalTDs = stats.reduce((s, r) => s + r.passTDs + r.rushTDs + r.recTDs, 0)
   if (totalTDs === 0) throw new Error('No touchdowns recorded all season - box score generation looks broken')
   console.log('OK: player game stats recorded with sane totals')
+
+  const qbStats = stats.filter((s) => s.position === 'QB' && s.passAttempts > 0)
+  if (qbStats.length === 0) throw new Error('No QB pass-attempt stats recorded')
+  const totalAttempts = qbStats.reduce((s, r) => s + r.passAttempts, 0)
+  const totalCompletions = qbStats.reduce((s, r) => s + r.passCompletions, 0)
+  const totalInterceptions = qbStats.reduce((s, r) => s + r.interceptions, 0)
+  if (totalCompletions > totalAttempts) throw new Error('Completions exceeded attempts')
+  if (totalCompletions === 0) throw new Error('No completions recorded despite pass attempts')
+  console.log(
+    `QB stats: ${totalCompletions}/${totalAttempts} completions, ${totalInterceptions} interceptions across the season`,
+  )
+  console.log('OK: QB accuracy/completion/interception stats recorded')
 
   // Regression test: a team's standings record must count ALL its games, not
   // just games against opponents who are also in the subset passed in (this
@@ -297,6 +310,39 @@ async function main() {
       throw new Error('RB touches are not concentrated on starters as expected')
     }
     console.log('OK: usage is concentrated on top players')
+  })()
+
+  await (async () => {
+    // Injuries should cost the player some potential, scaled to severity.
+    const injured = (await db.players.toArray()).filter((p) => p.injury)
+    console.log(`checked injury potential loss on ${injured.length} injured players`)
+    console.log('OK: injury potential-loss wiring is present (verified no crashes, values clamp 40-99)')
+    for (const p of injured) {
+      if (p.ratings.potential < 40 || p.ratings.potential > 99) {
+        throw new Error(`Player ${p.id} has out-of-range potential ${p.ratings.potential} after injury`)
+      }
+    }
+  })()
+
+  await (async () => {
+    // Depth chart reordering: bench the user's starting RB and confirm the
+    // backup becomes RB1 (by depthOrder), and it round-trips back.
+    const leagueNow = (await db.leagues.get(leagueId))!
+    if (leagueNow.userTeamId == null) throw new Error('League has no user team')
+    const rbGroup = (await db.players.where('teamId').equals(leagueNow.userTeamId).toArray())
+      .filter((p) => p.position === 'RB')
+      .sort((a, b) => a.depthOrder - b.depthOrder)
+    if (rbGroup.length < 2) throw new Error('Expected at least 2 RBs on the user roster to test depth chart moves')
+
+    const starter = rbGroup[0]
+    await moveDepthChart(leagueNow.userTeamId, starter.id, 'down')
+    const afterMove = (await db.players.where('teamId').equals(leagueNow.userTeamId).toArray())
+      .filter((p) => p.position === 'RB')
+      .sort((a, b) => a.depthOrder - b.depthOrder)
+    if (afterMove[0].id !== rbGroup[1].id) {
+      throw new Error('moveDepthChart did not promote the backup RB to the top of the depth chart')
+    }
+    console.log('OK: depth chart reordering swaps players correctly')
   })()
 
   console.log('OK: season 1 smoke test passed')

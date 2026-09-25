@@ -35,6 +35,9 @@ export function progressRatings(rng: Rng, ratings: Ratings, ageAfterBirthday: nu
     agility: clamp(ratings.agility * scale),
     awareness: clamp(ratings.awareness + (ageAfterBirthday > 29 ? 1 : 0)),
     potential: ratings.potential,
+    accuracy: clamp(ratings.accuracy * scale),
+    decisionMaking: clamp(ratings.decisionMaking * scale),
+    playmaking: clamp(ratings.playmaking * scale),
   }
 }
 

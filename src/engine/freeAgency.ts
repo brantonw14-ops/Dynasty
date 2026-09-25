@@ -1,5 +1,5 @@
 import type { Player, Team } from '../types'
-import { rosterNeeds } from './players'
+import { nextDepthOrder, rosterNeeds } from './players'
 import { randInt, type Rng } from './rng'
 import { marketSalary } from './salary'
 import { SALARY_CAP } from './teams'
@@ -84,11 +84,16 @@ export function runFreeAgency(
       needs.splice(needs.indexOf(player.position), 1)
       capRemaining.set(teamId, salaryCap - salary)
 
-      signings.push({
+      const teamRoster = rostersByTeam.get(teamId) ?? []
+      const signedPlayer = {
+        ...player,
         teamId,
-        player: { ...player, teamId, contract: { salary, yearsLeft: randInt(rng, 1, 3) } },
-        salary,
-      })
+        contract: { salary, yearsLeft: randInt(rng, 1, 3) },
+        depthOrder: nextDepthOrder(teamRoster, player.position),
+      }
+      teamRoster.push(signedPlayer)
+
+      signings.push({ teamId, player: signedPlayer, salary })
       madeProgress = true
     }
   }

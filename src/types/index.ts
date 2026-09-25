@@ -18,6 +18,11 @@ export interface Ratings {
   agility: number
   awareness: number
   potential: number
+  // QB-specific but generated for every position for a consistent shape;
+  // only meaningfully used/displayed for QBs.
+  accuracy: number
+  decisionMaking: number
+  playmaking: number
 }
 
 export interface Contract {
@@ -41,6 +46,10 @@ export interface Player {
   contract: Contract | null
   retired: boolean
   injury: Injury | null
+  // Depth-chart rank within this player's position on their current team
+  // (0 = starter). Defaults to an overall-based rank at generation time,
+  // but the user can freely reorder their own team's depth chart.
+  depthOrder: number
 }
 
 export type Conference = 'AFC' | 'NFC'
@@ -82,6 +91,9 @@ export interface PlayerGameStats {
   position: Position
   passYards: number
   passTDs: number
+  passAttempts: number
+  passCompletions: number
+  interceptions: number
   rushYards: number
   rushTDs: number
   recYards: number

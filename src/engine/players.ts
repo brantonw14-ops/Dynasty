@@ -44,6 +44,9 @@ function generateRatings(rng: Rng, ratingOffset = 0): Ratings {
     agility: clamp(randNormal(rng, 60, 15)),
     awareness: clamp(randNormal(rng, 55, 15)),
     potential,
+    accuracy: clamp(randNormal(rng, 60 + ratingOffset, 14)),
+    decisionMaking: clamp(randNormal(rng, 60 + ratingOffset, 14)),
+    playmaking: clamp(randNormal(rng, 60 + ratingOffset, 14)),
   }
 }
 
@@ -105,18 +108,38 @@ export function generatePlayer(
           },
     retired: false,
     injury: null,
+    depthOrder: 0,
   }
+}
+
+/** Assigns depth-chart rank (0 = starter) within each position group, best overall first. */
+export function assignDepthOrder<T extends { position: Position; ratings: { overall: number } }>(
+  players: T[],
+): (T & { depthOrder: number })[] {
+  const byPosition = new Map<Position, T[]>()
+  for (const p of players) {
+    const list = byPosition.get(p.position) ?? []
+    list.push(p)
+    byPosition.set(p.position, list)
+  }
+  const result: (T & { depthOrder: number })[] = []
+  for (const list of byPosition.values()) {
+    const sorted = [...list].sort((a, b) => b.ratings.overall - a.ratings.overall)
+    sorted.forEach((p, i) => result.push({ ...p, depthOrder: i }))
+  }
+  return result
 }
 
 export function generateRosterForTeam(rng: Rng, teamId: number): Omit<Player, 'id'>[] {
   const strength = generateTeamStrength(rng)
-  const players: Omit<Player, 'id'>[] = []
+  let players: Omit<Player, 'id'>[] = []
   for (const pos of POSITIONS) {
     const count = ROSTER_SHAPE[pos]
     for (let i = 0; i < count; i++) {
       players.push(generatePlayer(rng, pos, teamId, strength))
     }
   }
+  players = assignDepthOrder(players)
 
   // Real rosters are never allowed over the cap. A high skill+spend roll can
   // combine to push a stacked team over it, so scale every contract down
@@ -132,6 +155,12 @@ export function generateRosterForTeam(rng: Rng, teamId: number): Omit<Player, 'i
   }
 
   return players
+}
+
+/** Depth-chart rank to give a newly-acquired player: goes to the bottom of their new team's group. */
+export function nextDepthOrder(existingRoster: { position: Position; depthOrder: number }[], position: Position) {
+  const atPosition = existingRoster.filter((p) => p.position === position)
+  return atPosition.length === 0 ? 0 : Math.max(...atPosition.map((p) => p.depthOrder)) + 1
 }
 
 export type TeamOutlook = 'rebuilding' | 'contender' | 'superbowl'

@@ -7,6 +7,7 @@ import {
   cutPlayer,
   deleteLeague,
   getSeasonHistory,
+  moveDepthChart,
   openFreeAgency,
   previewLeagueTeams,
   proceedToDraft,
@@ -46,9 +47,24 @@ function formatMoney(n: number) {
   return `$${(n / 1_000_000).toFixed(1)}M`
 }
 
-function seasonStatLine(pos: Position, t?: { passYards: number; passTDs: number; rushYards: number; rushTDs: number; recYards: number; recTDs: number; receptions: number }) {
+interface SeasonStatTotals {
+  passYards: number
+  passTDs: number
+  passAttempts: number
+  passCompletions: number
+  interceptions: number
+  rushYards: number
+  rushTDs: number
+  recYards: number
+  recTDs: number
+  receptions: number
+}
+
+function seasonStatLine(pos: Position, t?: SeasonStatTotals) {
   if (!t) return '-'
-  if (pos === 'QB' && (t.passYards > 0 || t.passTDs > 0)) return `${t.passYards} yds, ${t.passTDs} TD`
+  if (pos === 'QB' && (t.passYards > 0 || t.passTDs > 0 || t.passAttempts > 0)) {
+    return `${t.passCompletions}/${t.passAttempts}, ${t.passYards} yds, ${t.passTDs} TD, ${t.interceptions} INT${t.rushYards > 0 ? ` · ${t.rushYards} rush yds` : ''}`
+  }
   if (pos === 'RB' && (t.rushYards > 0 || t.rushTDs > 0 || t.recYards > 0)) {
     return `${t.rushYards} rush yds, ${t.rushTDs} TD${t.recYards > 0 ? ` · ${t.recYards} rec yds` : ''}`
   }
@@ -58,24 +74,35 @@ function seasonStatLine(pos: Position, t?: { passYards: number; passTDs: number;
   return '-'
 }
 
-function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: number; season: number }) {
+function RosterView({
+  teamId,
+  leagueId,
+  season,
+  editable,
+}: {
+  teamId: number
+  leagueId: number
+  season: number
+  editable: boolean
+}) {
   const team = useLiveQuery(() => db.teams.get(teamId), [teamId])
   const roster = useLiveQuery(() => db.players.where('teamId').equals(teamId).toArray(), [teamId])
   const stats = useLiveQuery(
     () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
     [leagueId, season],
   )
+  const [moving, setMoving] = useState<number | null>(null)
 
   if (!team || !roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
-  const statTotals = new Map<
-    number,
-    { passYards: number; passTDs: number; rushYards: number; rushTDs: number; recYards: number; recTDs: number; receptions: number }
-  >()
+  const statTotals = new Map<number, SeasonStatTotals>()
   for (const s of stats) {
     const t = statTotals.get(s.playerId) ?? {
       passYards: 0,
       passTDs: 0,
+      passAttempts: 0,
+      passCompletions: 0,
+      interceptions: 0,
       rushYards: 0,
       rushTDs: 0,
       recYards: 0,
@@ -84,6 +111,9 @@ function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: nu
     }
     t.passYards += s.passYards
     t.passTDs += s.passTDs
+    t.passAttempts += s.passAttempts
+    t.passCompletions += s.passCompletions
+    t.interceptions += s.interceptions
     t.rushYards += s.rushYards
     t.rushTDs += s.rushTDs
     t.recYards += s.recYards
@@ -99,7 +129,16 @@ function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: nu
     byPosition.set(p.position, list)
   }
   for (const list of byPosition.values()) {
-    list.sort((a, b) => b.ratings.overall - a.ratings.overall)
+    list.sort((a, b) => a.depthOrder - b.depthOrder)
+  }
+
+  const handleMove = async (playerId: number, direction: 'up' | 'down') => {
+    setMoving(playerId)
+    try {
+      await moveDepthChart(teamId, playerId, direction)
+    } finally {
+      setMoving(null)
+    }
   }
 
   return (
@@ -109,30 +148,63 @@ function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: nu
         {roster.some((p) => p.injury) && (
           <> &middot; {roster.filter((p) => p.injury).length} injured</>
         )}
+        {editable && <> &middot; Use the arrows to set your depth chart / starters</>}
       </p>
 
       {POSITION_ORDER.map((pos) => {
         const players = byPosition.get(pos)
         if (!players || players.length === 0) return null
+        const isQB = pos === 'QB'
         return (
           <div key={pos} className="mb-6">
             <h2 className="text-sm font-semibold text-gray-500 mb-2">{pos}</h2>
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="text-left text-gray-400 border-b">
+                  {editable && <th className="py-1 w-10"></th>}
                   <th className="py-1">Name</th>
                   <th className="py-1 text-right">Age</th>
                   <th className="py-1 text-right">OVR</th>
                   <th className="py-1 text-right">POT</th>
+                  {isQB && (
+                    <>
+                      <th className="py-1 text-right">ACC</th>
+                      <th className="py-1 text-right">DEC</th>
+                      <th className="py-1 text-right">PLM</th>
+                    </>
+                  )}
                   <th className="py-1 text-right">Salary</th>
                   <th className="py-1 text-right">Yrs</th>
                   <th className="py-1 text-right">Season</th>
                 </tr>
               </thead>
               <tbody>
-                {players.map((p) => (
+                {players.map((p, i) => (
                   <tr key={p.id} className="border-b">
+                    {editable && (
+                      <td className="py-1">
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => handleMove(p.id, 'up')}
+                            disabled={moving === p.id || i === 0}
+                            className="px-1 border rounded text-[10px] disabled:opacity-30"
+                            title="Move up depth chart"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            onClick={() => handleMove(p.id, 'down')}
+                            disabled={moving === p.id || i === players.length - 1}
+                            className="px-1 border rounded text-[10px] disabled:opacity-30"
+                            title="Move down depth chart"
+                          >
+                            ↓
+                          </button>
+                        </div>
+                      </td>
+                    )}
                     <td className="py-1">
+                      {i === 0 && <span className="text-[10px] text-gray-500 mr-1">1st</span>}
                       {p.firstName} {p.lastName}
                       {p.injury && (
                         <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-900 text-red-200">
@@ -143,6 +215,13 @@ function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: nu
                     <td className="py-1 text-right">{p.age}</td>
                     <td className="py-1 text-right">{p.ratings.overall}</td>
                     <td className="py-1 text-right">{p.ratings.potential}</td>
+                    {isQB && (
+                      <>
+                        <td className="py-1 text-right">{p.ratings.accuracy}</td>
+                        <td className="py-1 text-right">{p.ratings.decisionMaking}</td>
+                        <td className="py-1 text-right">{p.ratings.playmaking}</td>
+                      </>
+                    )}
                     <td className="py-1 text-right">
                       {p.contract ? formatMoney(p.contract.salary) : '-'}
                     </td>
@@ -376,6 +455,9 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
   interface StatTotals {
     passYards: number
     passTDs: number
+    passAttempts: number
+    passCompletions: number
+    interceptions: number
     rushYards: number
     rushTDs: number
     recYards: number
@@ -386,6 +468,9 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
     const t = totals.get(s.playerId) ?? {
       passYards: 0,
       passTDs: 0,
+      passAttempts: 0,
+      passCompletions: 0,
+      interceptions: 0,
       rushYards: 0,
       rushTDs: 0,
       recYards: 0,
@@ -393,6 +478,9 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
     }
     t.passYards += s.passYards
     t.passTDs += s.passTDs
+    t.passAttempts += s.passAttempts
+    t.passCompletions += s.passCompletions
+    t.interceptions += s.interceptions
     t.rushYards += s.rushYards
     t.rushTDs += s.rushTDs
     t.recYards += s.recYards
@@ -410,6 +498,7 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
   const categories: { title: string; unit: string; rows: StatLeaderRow[] }[] = [
     { title: 'Passing Yards', unit: 'yds', rows: topBy('passYards', 'passTDs') },
     { title: 'Passing TDs', unit: 'TD', rows: topBy('passTDs') },
+    { title: 'Interceptions', unit: 'INT', rows: topBy('interceptions') },
     { title: 'Rushing Yards', unit: 'yds', rows: topBy('rushYards', 'rushTDs') },
     { title: 'Rushing TDs', unit: 'TD', rows: topBy('rushTDs') },
     { title: 'Receiving Yards', unit: 'yds', rows: topBy('recYards', 'recTDs') },
@@ -989,7 +1078,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
           </div>
 
           {tab === 'roster' && league.userTeamId != null && (
-            <RosterView teamId={league.userTeamId} leagueId={leagueId} season={league.season} />
+            <RosterView teamId={league.userTeamId} leagueId={leagueId} season={league.season} editable />
           )}
           {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
           {tab === 'stats' && <StatsLeadersView leagueId={leagueId} season={league.season} />}

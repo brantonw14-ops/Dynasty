@@ -4,12 +4,13 @@ import { runDraft } from './draft'
 import { computeCapSpace, expireContracts, runFreeAgency } from './freeAgency'
 import { simGame, type PlayerBoxScore } from './gameSim'
 import { advanceInjuries, rollNewInjuries } from './injuries'
-import { classifyTeamOutlook, generateRosterForTeam, rosterNeeds, type TeamOutlook } from './players'
+import { classifyTeamOutlook, generateRosterForTeam, nextDepthOrder, rosterNeeds, type TeamOutlook } from './players'
 import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
 import { marketSalary } from './salary'
 import { generateSchedule } from './schedule'
+import { adjustPotentialForSeason } from './seasonPerformance'
 import { computeConferenceSeeds, computeStandings, type PlayoffSeed } from './standings'
 import { generateTeams, SALARY_CAP } from './teams'
 import { evaluateTrade, type TradeEvaluation } from './trades'
@@ -146,6 +147,9 @@ async function persistBoxScore(
     position: b.position,
     passYards: b.passYards,
     passTDs: b.passTDs,
+    passAttempts: b.passAttempts,
+    passCompletions: b.passCompletions,
+    interceptions: b.interceptions,
     rushYards: b.rushYards,
     rushTDs: b.rushTDs,
     recYards: b.recYards,
@@ -397,8 +401,10 @@ export async function advanceToFreeAgency(leagueId: number) {
 
   const rng = createRng(league.season * 7919 + 1)
   const allPlayers = await db.players.toArray()
+  const seasonStats = await db.playerGameStats.where('[leagueId+season]').equals([leagueId, league.season]).toArray()
 
-  const { retiredIds, agedPlayers } = ageAndRetire(rng, allPlayers)
+  const withUpdatedPotential = adjustPotentialForSeason(allPlayers, seasonStats)
+  const { retiredIds, agedPlayers } = ageAndRetire(rng, withUpdatedPotential)
   const progressedPlayers = agedPlayers.map((p) => progressPlayer(rng, p))
   const expiredPlayers = expireContracts(progressedPlayers)
   if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
@@ -461,7 +467,28 @@ export async function signFreeAgent(leagueId: number, playerId: number) {
   await db.players.update(playerId, {
     teamId: league.userTeamId,
     contract: { salary, yearsLeft: 1 + Math.floor(rng() * 3) },
+    depthOrder: nextDepthOrder(roster, player.position),
   })
+}
+
+/** Moves a player up or down their own team's depth chart at their position. */
+export async function moveDepthChart(teamId: number, playerId: number, direction: 'up' | 'down') {
+  const player = await db.players.get(playerId)
+  if (!player || player.teamId !== teamId) throw new Error('Player is not on this team')
+
+  const positionGroup = (await db.players.where('teamId').equals(teamId).toArray())
+    .filter((p) => p.position === player.position)
+    .sort((a, b) => a.depthOrder - b.depthOrder)
+
+  const index = positionGroup.findIndex((p) => p.id === playerId)
+  const swapIndex = direction === 'up' ? index - 1 : index + 1
+  if (swapIndex < 0 || swapIndex >= positionGroup.length) return
+
+  const other = positionGroup[swapIndex]
+  await db.players.bulkPut([
+    { ...player, depthOrder: other.depthOrder },
+    { ...other, depthOrder: player.depthOrder },
+  ] as never[])
 }
 
 /**
@@ -498,11 +525,11 @@ export async function proceedToDraft(leagueId: number) {
     draftOrderTeamIds,
     excludeTeamIds,
   )
+  // runFreeAgency already pushes each signed player into rostersByTeam as it
+  // signs them (so later signings in the same pass see accurate cap/needs),
+  // so only the DB write is left to do here.
   if (signings.length > 0) {
     await db.players.bulkPut(signings.map((s) => s.player) as never[])
-    for (const s of signings) {
-      rostersByTeam.get(s.teamId)?.push(s.player as Player)
-    }
   }
 
   const picks = runDraft(rng, teams, rostersByTeam, draftOrderTeamIds)
@@ -553,8 +580,12 @@ export async function proposeTrade(
     return { accepted: false, reason: 'Would put your team over the salary cap' }
   }
 
-  await db.players.bulkPut(giving.map((p) => ({ ...p, teamId: teamBId })) as never[])
-  await db.players.bulkPut(getting.map((p) => ({ ...p, teamId: teamAId })) as never[])
+  await db.players.bulkPut(
+    giving.map((p) => ({ ...p, teamId: teamBId, depthOrder: nextDepthOrder(rosterB, p.position) })) as never[],
+  )
+  await db.players.bulkPut(
+    getting.map((p) => ({ ...p, teamId: teamAId, depthOrder: nextDepthOrder(rosterA, p.position) })) as never[],
+  )
 
   return evaluation
 }

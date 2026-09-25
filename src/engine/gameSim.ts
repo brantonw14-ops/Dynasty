@@ -18,6 +18,9 @@ export interface PlayerBoxScore {
   position: Position
   passYards: number
   passTDs: number
+  passAttempts: number
+  passCompletions: number
+  interceptions: number
   rushYards: number
   rushTDs: number
   recYards: number
@@ -38,12 +41,19 @@ function emptyBox(playerId: number, position: Position): PlayerBoxScore {
     position,
     passYards: 0,
     passTDs: 0,
+    passAttempts: 0,
+    passCompletions: 0,
+    interceptions: 0,
     rushYards: 0,
     rushTDs: 0,
     recYards: 0,
     recTDs: 0,
     receptions: 0,
   }
+}
+
+function clamp01(n: number) {
+  return Math.max(0, Math.min(1, n))
 }
 
 function pickWeighted<T>(rng: Rng, items: T[], weightFn: (item: T) => number): T {
@@ -72,20 +82,19 @@ function generateBoxScore(rng: Rng, roster: Player[], teamScore: number): Map<nu
     return box.get(p.id)!
   }
 
-  const qb = roster
-    .filter((p) => p.position === 'QB')
-    .sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
-  const rbs = roster
-    .filter((p) => p.position === 'RB')
-    .sort((a, b) => b.ratings.overall - a.ratings.overall)
-  const receivers = roster
-    .filter((p) => p.position === 'WR' || p.position === 'TE')
-    .sort((a, b) => b.ratings.overall - a.ratings.overall)
+  // Depth chart order (0 = starter) decides who plays each position - this
+  // respects a user's own manual depth chart reordering, and defaults to an
+  // overall-based rank for AI teams that never touch it.
+  const byDepth = (a: Player, b: Player) => a.depthOrder - b.depthOrder
+
+  const qb = roster.filter((p) => p.position === 'QB').sort(byDepth)[0]
+  const rbs = roster.filter((p) => p.position === 'RB').sort(byDepth)
+  const receivers = roster.filter((p) => p.position === 'WR' || p.position === 'TE').sort(byDepth)
 
   const totalYards = Math.max(120, Math.round(teamScore * 13 + randNormal(rng, 0, 40)))
   const passShare = Math.min(0.8, Math.max(0.4, 0.6 + randNormal(rng, 0, 0.08)))
   const passYards = Math.round(totalYards * passShare)
-  const rushYards = totalYards - passYards
+  let rushYards = totalYards - passYards
 
   const totalTDs = Math.max(0, Math.round(teamScore / 7 + randNormal(rng, 0, 0.4)))
   let passTDs = 0
@@ -99,6 +108,31 @@ function generateBoxScore(rng: Rng, roster: Player[], teamScore: number): Map<nu
     const stats = statsFor(qb)
     stats.passYards += passYards
     stats.passTDs += passTDs
+
+    // Attempts scale with yardage; completion rate is driven by accuracy.
+    const attempts = Math.max(8, Math.round(passYards / 7.5 + randNormal(rng, 0, 3)))
+    const completionRate = clamp01(0.63 + (qb.ratings.accuracy - 60) * 0.006)
+    const completions = Math.min(attempts, Math.max(0, Math.round(attempts * completionRate)))
+    stats.passAttempts += attempts
+    stats.passCompletions += completions
+
+    // Bad decision-making means more picks; good decision-making means
+    // fewer - roughly 0-3 interceptions per game at the extremes.
+    const interceptionRate = clamp01((70 - qb.ratings.decisionMaking) * 0.006)
+    let interceptions = 0
+    for (let i = 0; i < attempts; i++) {
+      if (rng() < interceptionRate / attempts) interceptions++
+    }
+    stats.interceptions += interceptions
+
+    // Mobile, playmaking QBs pick up some scramble yardage of their own,
+    // carved out of the team's rushing total rather than added on top.
+    const scrambleShare = clamp01((qb.ratings.playmaking - 55) / 130)
+    const qbRushYards = Math.max(0, Math.round(rushYards * scrambleShare * 0.35))
+    if (qbRushYards > 0) {
+      stats.rushYards += qbRushYards
+      rushYards -= qbRushYards
+    }
   }
 
   // A real backfield/receiving corps is not an even split by talent - the

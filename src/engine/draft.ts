@@ -19,8 +19,14 @@ export function runDraft(
   draftOrderTeamIds: number[],
 ): DraftPick[] {
   const needsByTeam = new Map<number, Position[]>()
+  const depthCount = new Map<string, number>()
   for (const team of teams) {
-    needsByTeam.set(team.id, rosterNeeds(rostersByTeam.get(team.id) ?? []))
+    const roster = rostersByTeam.get(team.id) ?? []
+    needsByTeam.set(team.id, rosterNeeds(roster))
+    for (const p of roster) {
+      const key = `${team.id}:${p.position}`
+      depthCount.set(key, Math.max(depthCount.get(key) ?? 0, p.depthOrder + 1))
+    }
   }
 
   const allNeededPositions = [...needsByTeam.values()].flat()
@@ -42,6 +48,10 @@ export function runDraft(
       const [prospect] = prospects.splice(prospectIndex, 1)
       needs.splice(needs.indexOf(prospect.position), 1)
 
+      const depthKey = `${teamId}:${prospect.position}`
+      const depthOrder = depthCount.get(depthKey) ?? 0
+      depthCount.set(depthKey, depthOrder + 1)
+
       picks.push({
         teamId,
         player: {
@@ -49,6 +59,7 @@ export function runDraft(
           teamId,
           age: randInt(rng, 21, 23),
           contract: { salary: randInt(rng, 700_000, 1_200_000), yearsLeft: 4 },
+          depthOrder,
         },
       })
     }
