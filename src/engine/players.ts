@@ -22,15 +22,21 @@ export function rosterNeeds(roster: Player[]): Position[] {
   return needs
 }
 
+export const MIN_OVERALL = 55
+
 function clamp(n: number, min = 40, max = 99) {
   return Math.max(min, Math.min(max, Math.round(n)))
 }
 
 function generateRatings(rng: Rng): Ratings {
-  const base = randNormal(rng, 60, 12)
-  const potential = clamp(base + Math.abs(randNormal(rng, 8, 6)))
+  // Mean shifted up from the old 60 so a 55 floor doesn't pile up too much
+  // of the distribution right at the minimum.
+  const base = randNormal(rng, 68, 12)
+  const overall = clamp(base, MIN_OVERALL, 99)
+  // Potential is a ceiling, so it can never be below the player's own overall.
+  const potential = clamp(overall + Math.abs(randNormal(rng, 8, 6)), overall, 99)
   return {
-    overall: clamp(base),
+    overall,
     speed: clamp(randNormal(rng, 60, 15)),
     strength: clamp(randNormal(rng, 60, 15)),
     agility: clamp(randNormal(rng, 60, 15)),
@@ -48,7 +54,7 @@ function generateRatings(rng: Rng): Ratings {
  * cap-blocked.
  */
 function generateContractSalary(rng: Rng, overall: number) {
-  const base = 600_000 + Math.max(0, overall - 50) * 220_000
+  const base = 450_000 + Math.max(0, overall - MIN_OVERALL) * 170_000
   return Math.round(base * (0.8 + rng() * 0.4))
 }
 

@@ -9,6 +9,7 @@ import {
   signFreeAgent,
   simWeek,
 } from '../src/engine/league'
+import { MIN_OVERALL } from '../src/engine/players'
 import { computeStandings } from '../src/engine/standings'
 import { playerValue } from '../src/engine/trades'
 
@@ -93,6 +94,36 @@ async function main() {
   const teamCount = await db.teams.count()
   console.log('teams:', teamCount, '(expected 32)')
   if (teamCount !== 32) throw new Error('Expected 32 NFL teams')
+
+  await (async () => {
+    const allPlayers = await db.players.toArray()
+    const overalls = allPlayers.map((p) => p.ratings.overall)
+    const minOverall = Math.min(...overalls)
+    const maxOverall = Math.max(...overalls)
+    console.log('overall rating range:', minOverall, '-', maxOverall, `(expected ${MIN_OVERALL}-99)`)
+    if (minOverall < MIN_OVERALL) throw new Error(`Found a player rated below ${MIN_OVERALL} overall`)
+    if (maxOverall > 99) throw new Error('Found a player rated above 99 overall')
+    for (const p of allPlayers) {
+      if (p.ratings.potential < p.ratings.overall) {
+        throw new Error(`Player ${p.id} has potential (${p.ratings.potential}) below overall (${p.ratings.overall})`)
+      }
+    }
+
+    // Salary must track overall: sort by overall and confirm salary is
+    // non-decreasing in aggregate (allow a little noise, but a low-rated
+    // player should never out-earn a much higher-rated one).
+    const rostered = allPlayers.filter((p) => p.contract)
+    const byOverall = [...rostered].sort((a, b) => a.ratings.overall - b.ratings.overall)
+    const lowTier = byOverall.slice(0, Math.floor(byOverall.length * 0.2))
+    const highTier = byOverall.slice(-Math.floor(byOverall.length * 0.2))
+    const avgLowSalary = lowTier.reduce((s, p) => s + p.contract!.salary, 0) / lowTier.length
+    const avgHighSalary = highTier.reduce((s, p) => s + p.contract!.salary, 0) / highTier.length
+    console.log('avg salary: bottom 20% overall =', avgLowSalary, 'top 20% overall =', avgHighSalary)
+    if (avgHighSalary <= avgLowSalary) {
+      throw new Error('Top-rated players are not earning more than bottom-rated players on average')
+    }
+    console.log('OK: overall floor/ceiling and salary-tracks-overall checks passed')
+  })()
 
   await (async () => {
     const startLeague = (await db.leagues.get(leagueId))!
