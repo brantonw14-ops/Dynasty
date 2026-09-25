@@ -14,7 +14,7 @@ import {
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
 import { rosterNeeds } from './engine/players'
-import { computeStandings } from './engine/standings'
+import { computeConferenceSeeds, computeStandings } from './engine/standings'
 import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
 
 const OUTLOOK_LABELS: Record<TeamPreview['outlook'], string> = {
@@ -450,14 +450,21 @@ function FreeAgencyView({
   )
 }
 
+/** Highlights the user's own team wherever it shows up in a list/table. */
+function userRowClass(teamId: number, userTeamId: number | null) {
+  return teamId === userTeamId ? 'bg-blue-50 border-l-2 border-l-blue-600' : ''
+}
+
 function StandingsTable({
   teams,
   regularGames,
   teamName,
+  userTeamId,
 }: {
   teams: Team[]
   regularGames: GameResult[]
   teamName: (id: number) => string
+  userTeamId: number | null
 }) {
   return (
     <>
@@ -476,8 +483,11 @@ function StandingsTable({
                   <table className="w-full text-sm border-collapse">
                     <tbody>
                       {standings.map((row) => (
-                        <tr key={row.teamId} className="border-b">
-                          <td className="py-1">{teamName(row.teamId)}</td>
+                        <tr
+                          key={row.teamId}
+                          className={`border-b ${userRowClass(row.teamId, userTeamId)}`}
+                        >
+                          <td className="py-1 pl-1">{teamName(row.teamId)}</td>
                           <td className="py-1 text-right w-10">{row.wins}</td>
                           <td className="py-1 text-right w-10">{row.losses}</td>
                           <td className="py-1 text-right w-10">{row.ties}</td>
@@ -492,6 +502,78 @@ function StandingsTable({
         </div>
       ))}
     </>
+  )
+}
+
+function PlayoffPictureView({
+  teams,
+  regularGames,
+  playoffGamesByRound,
+  userTeamId,
+  teamName,
+}: {
+  teams: Team[]
+  regularGames: GameResult[]
+  playoffGamesByRound: Map<PlayoffRound, GameResult[]>
+  userTeamId: number | null
+  teamName: (id: number) => string
+}) {
+  const seedsByConf: Record<Conference, ReturnType<typeof computeConferenceSeeds>> = {
+    AFC: computeConferenceSeeds(teams, regularGames, 'AFC'),
+    NFC: computeConferenceSeeds(teams, regularGames, 'NFC'),
+  }
+
+  const gameRow = (g: GameResult) => (
+    <li key={g.id} className={`text-sm border-b py-1 px-1 rounded ${userRowClass(g.homeTeamId, userTeamId) || userRowClass(g.awayTeamId, userTeamId)}`}>
+      <span className={g.awayTeamId === userTeamId ? 'font-semibold' : ''}>
+        {teamName(g.awayTeamId)} {g.awayScore}
+      </span>
+      {' @ '}
+      <span className={g.homeTeamId === userTeamId ? 'font-semibold' : ''}>
+        {teamName(g.homeTeamId)} {g.homeScore}
+      </span>
+    </li>
+  )
+
+  return (
+    <div>
+      <h2 className="text-lg font-medium mb-2">Playoff Picture</h2>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-4 mb-8">
+        {CONFERENCES.map((conf) => (
+          <div key={conf}>
+            <h3 className="text-xs font-semibold text-gray-500 mb-1">{conf} Seeding</h3>
+            <table className="w-full text-sm border-collapse">
+              <tbody>
+                {seedsByConf[conf].map((s) => (
+                  <tr key={s.teamId} className={`border-b ${userRowClass(s.teamId, userTeamId)}`}>
+                    <td className="py-1 pl-1 w-6 text-gray-400">{s.seed}</td>
+                    <td className="py-1">
+                      {teamName(s.teamId)}
+                      {s.divisionWinner && <span className="text-gray-400 text-xs"> (div)</span>}
+                    </td>
+                    <td className="py-1 text-right w-16">
+                      {s.wins}-{s.losses}
+                      {s.ties ? `-${s.ties}` : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+
+      {ROUND_ORDER.map((round) => {
+        const games = playoffGamesByRound.get(round) ?? []
+        if (games.length === 0) return null
+        return (
+          <div key={round} className="mb-4">
+            <h3 className="text-xs font-semibold text-gray-500 mb-1">{ROUND_LABELS[round]}</h3>
+            <ul className="space-y-1">{games.map(gameRow)}</ul>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -664,38 +746,36 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
 
           {tab === 'league' && (
             <>
-              <h2 className="text-lg font-medium mb-2">Standings</h2>
-              <StandingsTable teams={teams} regularGames={regularGames} teamName={teamName} />
-
-              {ROUND_ORDER.some((r) => (playoffGamesByRound.get(r)?.length ?? 0) > 0) && (
-                <div className="mb-8">
-                  <h2 className="text-lg font-medium mb-2">Playoffs</h2>
-                  {ROUND_ORDER.map((round) => {
-                    const roundGames = playoffGamesByRound.get(round) ?? []
-                    if (roundGames.length === 0) return null
-                    return (
-                      <div key={round} className="mb-3">
-                        <h3 className="text-xs font-semibold text-gray-500 mb-1">
-                          {ROUND_LABELS[round]}
-                        </h3>
-                        <ul className="space-y-1">
-                          {roundGames.map((g) => (
-                            <li key={g.id} className="text-sm border-b py-1">
-                              {teamName(g.awayTeamId)} {g.awayScore} @ {teamName(g.homeTeamId)}{' '}
-                              {g.homeScore}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )
-                  })}
-                </div>
+              {league.phase === 'playoffs' || league.phase === 'complete' ? (
+                <PlayoffPictureView
+                  teams={teams}
+                  regularGames={regularGames}
+                  playoffGamesByRound={playoffGamesByRound}
+                  userTeamId={league.userTeamId}
+                  teamName={teamName}
+                />
+              ) : (
+                <>
+                  <h2 className="text-lg font-medium mb-2">Standings</h2>
+                  <StandingsTable
+                    teams={teams}
+                    regularGames={regularGames}
+                    teamName={teamName}
+                    userTeamId={league.userTeamId}
+                  />
+                </>
               )}
 
               <h2 className="text-lg font-medium mb-2">Results</h2>
               <ul className="space-y-1">
                 {[...regularGames].reverse().map((g) => (
-                  <li key={g.id} className="text-sm border-b py-1">
+                  <li
+                    key={g.id}
+                    className={`text-sm border-b py-1 px-1 rounded ${
+                      userRowClass(g.homeTeamId, league.userTeamId) ||
+                      userRowClass(g.awayTeamId, league.userTeamId)
+                    }`}
+                  >
                     Wk{g.week}: {teamName(g.awayTeamId)} {g.awayScore} @ {teamName(g.homeTeamId)}{' '}
                     {g.homeScore}
                   </li>
