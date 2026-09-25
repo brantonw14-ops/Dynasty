@@ -4,8 +4,10 @@ import { db } from './db'
 import {
   advanceToFreeAgency,
   createLeague,
+  cutPlayer,
   deleteLeague,
   getSeasonHistory,
+  openFreeAgency,
   previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
@@ -450,6 +452,119 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
   )
 }
 
+function ResignView({
+  leagueId,
+  userTeamId,
+  season,
+  onOpenFreeAgency,
+}: {
+  leagueId: number
+  userTeamId: number
+  season: number
+  onOpenFreeAgency: () => void
+}) {
+  const roster = useLiveQuery(
+    () => db.players.where('teamId').equals(userTeamId).toArray(),
+    [userTeamId],
+  )
+  const stats = useLiveQuery(
+    () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season - 1]).toArray(),
+    [leagueId, season],
+  )
+  const [cuttingId, setCuttingId] = useState<number | null>(null)
+  const [opening, setOpening] = useState(false)
+
+  if (!roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
+
+  const statTotals = new Map<number, number>()
+  for (const s of stats) {
+    const total = s.passYards + s.rushYards + s.recYards + (s.passTDs + s.rushTDs + s.recTDs) * 20
+    statTotals.set(s.playerId, (statTotals.get(s.playerId) ?? 0) + total)
+  }
+
+  const capSpace = computeCapSpace(roster)
+
+  const handleCut = async (playerId: number) => {
+    setCuttingId(playerId)
+    try {
+      await cutPlayer(leagueId, playerId)
+    } finally {
+      setCuttingId(null)
+    }
+  }
+
+  const handleOpen = async () => {
+    setOpening(true)
+    try {
+      await openFreeAgency(leagueId)
+      onOpenFreeAgency()
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  const sorted = [...roster].sort((a, b) => b.ratings.overall - a.ratings.overall)
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-gray-500">
+          Review your roster and cut anyone you don't want before free agency opens. Cap space{' '}
+          {formatMoney(capSpace)}
+        </p>
+        <button
+          onClick={handleOpen}
+          disabled={opening}
+          className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50"
+        >
+          {opening ? 'Opening...' : 'Open Free Agency'}
+        </button>
+      </div>
+
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="text-left text-gray-400 border-b">
+            <th className="py-1">Name</th>
+            <th className="py-1">Pos</th>
+            <th className="py-1 text-right">Age</th>
+            <th className="py-1 text-right">OVR</th>
+            <th className="py-1 text-right">Salary</th>
+            <th className="py-1 text-right">Yrs Left</th>
+            <th className="py-1 text-right">Last Season</th>
+            <th className="py-1"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((p) => (
+            <tr key={p.id} className="border-b">
+              <td className="py-1">
+                {p.firstName} {p.lastName}
+              </td>
+              <td className="py-1">{p.position}</td>
+              <td className="py-1 text-right">{p.age}</td>
+              <td className="py-1 text-right">{p.ratings.overall}</td>
+              <td className="py-1 text-right">{p.contract ? formatMoney(p.contract.salary) : '-'}</td>
+              <td className="py-1 text-right">{p.contract?.yearsLeft ?? '-'}</td>
+              <td className="py-1 text-right text-gray-500">
+                {statTotals.has(p.id) ? statTotals.get(p.id) : '-'}
+              </td>
+              <td className="py-1 text-right">
+                <button
+                  onClick={() => handleCut(p.id)}
+                  disabled={cuttingId === p.id}
+                  className="px-2 py-1 border rounded text-xs disabled:opacity-40"
+                >
+                  {cuttingId === p.id ? 'Cutting...' : 'Cut'}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function FreeAgencyView({
   leagueId,
   userTeamId,
@@ -762,9 +877,11 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
               ? `Week ${league.week} of ${league.regularSeasonWeeks}`
               : league.phase === 'playoffs'
                 ? 'Playoffs'
-                : league.phase === 'freeagency'
-                  ? 'Free Agency'
-                  : 'Complete'}
+                : league.phase === 'resign'
+                  ? 'Manage Roster'
+                  : league.phase === 'freeagency'
+                    ? 'Free Agency'
+                    : 'Complete'}
             {league.userTeamId != null && <> &middot; Your team: {teamName(league.userTeamId)}</>}
           </p>
         </div>
@@ -777,7 +894,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             >
               {advancing ? 'Advancing...' : `Start ${league.season + 1} Offseason`}
             </button>
-          ) : league.phase === 'freeagency' ? null : (
+          ) : league.phase === 'freeagency' || league.phase === 'resign' ? null : (
             <button
               onClick={handleSimWeek}
               disabled={simming}
@@ -803,7 +920,17 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
         </div>
       )}
 
-      {league.phase === 'freeagency' && league.userTeamId != null ? (
+      {league.phase === 'resign' && league.userTeamId != null ? (
+        <>
+          <h2 className="text-lg font-medium mb-2">Manage Roster</h2>
+          <ResignView
+            leagueId={leagueId}
+            userTeamId={league.userTeamId}
+            season={league.season}
+            onOpenFreeAgency={() => setTab('league')}
+          />
+        </>
+      ) : league.phase === 'freeagency' && league.userTeamId != null ? (
         <>
           <h2 className="text-lg font-medium mb-2">Free Agency</h2>
           <FreeAgencyView

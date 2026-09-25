@@ -98,7 +98,7 @@ export interface ScheduledGame {
   awayTeamId: number
 }
 
-export type LeaguePhase = 'regular' | 'playoffs' | 'complete' | 'freeagency'
+export type LeaguePhase = 'regular' | 'playoffs' | 'complete' | 'resign' | 'freeagency'
 
 export interface League {
   id: number

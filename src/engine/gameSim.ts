@@ -75,8 +75,12 @@ function generateBoxScore(rng: Rng, roster: Player[], teamScore: number): Map<nu
   const qb = roster
     .filter((p) => p.position === 'QB')
     .sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
-  const rbs = roster.filter((p) => p.position === 'RB')
-  const receivers = roster.filter((p) => p.position === 'WR' || p.position === 'TE')
+  const rbs = roster
+    .filter((p) => p.position === 'RB')
+    .sort((a, b) => b.ratings.overall - a.ratings.overall)
+  const receivers = roster
+    .filter((p) => p.position === 'WR' || p.position === 'TE')
+    .sort((a, b) => b.ratings.overall - a.ratings.overall)
 
   const totalYards = Math.max(120, Math.round(teamScore * 13 + randNormal(rng, 0, 40)))
   const passShare = Math.min(0.8, Math.max(0.4, 0.6 + randNormal(rng, 0, 0.08)))
@@ -97,28 +101,59 @@ function generateBoxScore(rng: Rng, roster: Player[], teamScore: number): Map<nu
     stats.passTDs += passTDs
   }
 
-  const weight = (p: Player) => Math.pow(p.ratings.overall, 2.2)
+  // A real backfield/receiving corps is not an even split by talent - the
+  // starter gets the bulk of the touches every week, and depth guys only
+  // see the field (and box score) some weeks, less often the further down
+  // the depth chart they sit. `activeWithShares` picks who plays this game
+  // and how big a slice of the work they get, ranked by overall.
+  function activeWithShares(
+    players: Player[],
+    alwaysActive: number,
+    partialCount: number,
+    partialChance: number,
+    deepChance: number,
+    shares: number[],
+  ): { player: Player; share: number }[] {
+    const active = players.filter((_, i) => {
+      if (i < alwaysActive) return true
+      if (i < alwaysActive + partialCount) return rng() < partialChance
+      return rng() < deepChance
+    })
+    const rawShares = active.map((_, i) => shares[i] ?? shares[shares.length - 1] * 0.5)
+    const total = rawShares.reduce((a, b) => a + b, 0) || 1
+    return active.map((player, i) => ({ player, share: rawShares[i] / total }))
+  }
 
-  if (rbs.length > 0) {
-    const totalWeight = rbs.reduce((sum, p) => sum + weight(p), 0)
-    for (const p of rbs) {
-      statsFor(p).rushYards += Math.round((rushYards * weight(p)) / totalWeight)
+  const activeRbs = activeWithShares(rbs, 1, 1, 0.6, 0.2, [0.68, 0.22, 0.08, 0.02])
+  const activeReceivers = activeWithShares(
+    receivers,
+    3,
+    2,
+    0.55,
+    0.2,
+    [0.3, 0.22, 0.16, 0.12, 0.1, 0.06, 0.04],
+  )
+
+  if (activeRbs.length > 0) {
+    for (const { player, share } of activeRbs) {
+      statsFor(player).rushYards += Math.round(rushYards * share)
     }
+    const weight = (p: Player) => Math.pow(p.ratings.overall, 2.2)
     for (let i = 0; i < rushTDs; i++) {
-      statsFor(pickWeighted(rng, rbs, weight)).rushTDs += 1
+      statsFor(pickWeighted(rng, activeRbs.map((a) => a.player), weight)).rushTDs += 1
     }
   }
 
-  if (receivers.length > 0) {
-    const totalWeight = receivers.reduce((sum, p) => sum + weight(p), 0)
-    for (const p of receivers) {
-      const yards = Math.round((passYards * weight(p)) / totalWeight)
-      const stats = statsFor(p)
+  if (activeReceivers.length > 0) {
+    for (const { player, share } of activeReceivers) {
+      const yards = Math.round(passYards * share)
+      const stats = statsFor(player)
       stats.recYards += yards
       stats.receptions += Math.max(yards > 0 ? 1 : 0, Math.round(yards / 12))
     }
+    const weight = (p: Player) => Math.pow(p.ratings.overall, 2.2)
     for (let i = 0; i < passTDs; i++) {
-      statsFor(pickWeighted(rng, receivers, weight)).recTDs += 1
+      statsFor(pickWeighted(rng, activeReceivers.map((a) => a.player), weight)).recTDs += 1
     }
   }
 

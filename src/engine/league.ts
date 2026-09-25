@@ -8,6 +8,7 @@ import { classifyTeamOutlook, generateRosterForTeam, rosterNeeds, type TeamOutlo
 import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
+import { marketSalary } from './salary'
 import { generateSchedule } from './schedule'
 import { computeConferenceSeeds, computeStandings, type PlayoffSeed } from './standings'
 import { generateTeams, SALARY_CAP } from './teams'
@@ -382,11 +383,12 @@ async function draftOrderFor(leagueId: number, season: number, teams: Team[]) {
 
 /**
  * Offseason step 1: ages every player a year (with retirements and rating
- * progression) and lets contracts expire into free agency, then pauses the
- * league in the 'freeagency' phase. AI teams deliberately do NOT sign
- * anyone yet - the user gets an uncontested shopping window here; AI
- * signing only happens once they click through to the draft (proceedToDraft),
- * so the whole pool isn't gone before they ever see the free agent list.
+ * progression) and lets expiring contracts hit free agency, then pauses the
+ * league in the 'resign' phase - a window where the user can review their
+ * own roster's contracts and cut players to free up cap space *before*
+ * free agency opens, same as a real front office does. AI teams don't
+ * touch free agency at all yet; that only happens once the user moves on
+ * to `openFreeAgency` and then `proceedToDraft`.
  */
 export async function advanceToFreeAgency(leagueId: number) {
   const league = await db.leagues.get(leagueId)
@@ -407,11 +409,33 @@ export async function advanceToFreeAgency(leagueId: number) {
   const nextSeason = league.season + 1
   await db.leagues.update(leagueId, {
     season: nextSeason,
-    phase: 'freeagency',
+    phase: 'resign',
     champTeamId: null,
   })
 
   return { retiredCount: retiredIds.length, freeAgentCount }
+}
+
+/** Releases a player from their team during the pre-free-agency resign window, freeing up their cap hit. */
+export async function cutPlayer(leagueId: number, playerId: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) throw new Error('League not found')
+  if (league.phase !== 'resign') throw new Error('Can only cut players before free agency opens')
+  if (league.userTeamId == null) throw new Error('League has no user team')
+
+  const player = await db.players.get(playerId)
+  if (!player || player.teamId !== league.userTeamId) throw new Error('Player is not on your team')
+
+  await db.players.update(playerId, { teamId: null, contract: null })
+}
+
+/** Closes the resign window and opens free agency for the user to shop the pool. */
+export async function openFreeAgency(leagueId: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) throw new Error('League not found')
+  if (league.phase !== 'resign') throw new Error('Not in the resign window')
+
+  await db.leagues.update(leagueId, { phase: 'freeagency' })
 }
 
 /** Signs an available free agent to the user's team during the free agency window. */
@@ -431,7 +455,7 @@ export async function signFreeAgent(leagueId: number, playerId: number) {
 
   const capSpace = computeCapSpace(roster)
   const rng = createRng(league.season * 7919 + playerId)
-  const salary = Math.round((500_000 + Math.max(0, player.ratings.overall - 50) * 250_000) * (0.85 + rng() * 0.3))
+  const salary = Math.round(marketSalary(player.ratings.overall, player.age) * (0.9 + rng() * 0.25))
   if (salary > capSpace) throw new Error('Not enough cap space to sign this player')
 
   await db.players.update(playerId, {

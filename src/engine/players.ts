@@ -2,6 +2,7 @@ import type { Player, Position, Ratings } from '../types'
 import { randomName } from './names'
 import { randInt, randNormal, type Rng } from './rng'
 import { SALARY_CAP } from './teams'
+import { marketSalary } from './salary'
 
 const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
 
@@ -47,16 +48,12 @@ function generateRatings(rng: Rng, ratingOffset = 0): Ratings {
 }
 
 /**
- * Salary scales with overall rating (roughly matching the market-rate
- * formula free agency/trades use elsewhere), with some random variance.
- * Tuned so a full roster averages well under the cap - real teams carry
- * meaningful cap space, not exactly $0 of it, and leaving room is what
- * makes free agency and trades actually possible instead of instantly
- * cap-blocked.
+ * Salary scales with overall rating and age using the same market-rate
+ * curve free agency/trades use, with some random variance layered on top.
  */
-function generateContractSalary(rng: Rng, overall: number, spendFactor = 1) {
-  const base = 450_000 + Math.max(0, overall - MIN_OVERALL) * 170_000
-  return Math.round(base * (0.8 + rng() * 0.4) * spendFactor)
+function generateContractSalary(rng: Rng, overall: number, age: number, spendFactor = 1) {
+  const base = marketSalary(overall, age)
+  return Math.round(base * (0.85 + rng() * 0.3) * spendFactor)
 }
 
 /**
@@ -103,7 +100,7 @@ export function generatePlayer(
       teamId === null
         ? null
         : {
-            salary: generateContractSalary(rng, ratings.overall, strength?.spendFactor ?? 1),
+            salary: generateContractSalary(rng, ratings.overall, age, strength?.spendFactor ?? 1),
             yearsLeft: randInt(rng, 1, 4),
           },
     retired: false,

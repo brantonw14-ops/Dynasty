@@ -1,6 +1,7 @@
 import type { Player, Team } from '../types'
 import { rosterNeeds } from './players'
 import { randInt, type Rng } from './rng'
+import { marketSalary } from './salary'
 import { SALARY_CAP } from './teams'
 
 /** Remaining budget to spend this offseason: full cap minus rostered salaries. */
@@ -26,9 +27,8 @@ export function expireContracts(players: Player[]): Player[] {
   })
 }
 
-function estimateSalary(rng: Rng, overall: number) {
-  const base = 500_000 + Math.max(0, overall - 50) * 250_000
-  return Math.round(base * (0.85 + rng() * 0.3))
+function estimateSalary(rng: Rng, overall: number, age: number) {
+  return Math.round(marketSalary(overall, age) * (0.9 + rng() * 0.25))
 }
 
 export interface FreeAgentSigning {
@@ -74,13 +74,13 @@ export function runFreeAgency(
       const salaryCap = capRemaining.get(teamId) ?? 0
       const candidateIndex = pool.findIndex((p) => {
         if (!needs.includes(p.position)) return false
-        const salary = estimateSalary(rng, p.ratings.overall)
+        const salary = estimateSalary(rng, p.ratings.overall, p.age)
         return salary <= salaryCap
       })
       if (candidateIndex === -1) continue
 
       const [player] = pool.splice(candidateIndex, 1)
-      const salary = estimateSalary(rng, player.ratings.overall)
+      const salary = estimateSalary(rng, player.ratings.overall, player.age)
       needs.splice(needs.indexOf(player.position), 1)
       capRemaining.set(teamId, salaryCap - salary)
 

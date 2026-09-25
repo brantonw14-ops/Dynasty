@@ -1,5 +1,6 @@
 import type { Player } from '../types'
 import { ROSTER_SHAPE } from './players'
+import { marketSalary } from './salary'
 import { SALARY_CAP } from './teams'
 
 /**
@@ -9,7 +10,11 @@ import { SALARY_CAP } from './teams'
  * the same player on an expensive one).
  */
 export function playerValue(p: Player): number {
-  let value = p.ratings.overall * 100
+  // Elite talent is worth far more than raw overall alone suggests - a
+  // 95 overall isn't "5% better" than a 90, real rosters are built around
+  // a handful of stars and everyone else. This mirrors the convexity of
+  // the market-rate salary curve.
+  let value = Math.pow(Math.max(0, p.ratings.overall - 40), 2.6) / 2
 
   if (p.age <= 26) {
     value += (p.ratings.potential - p.ratings.overall) * 30
@@ -19,8 +24,8 @@ export function playerValue(p: Player): number {
   }
 
   if (p.contract) {
-    const marketSalary = 500_000 + Math.max(0, p.ratings.overall - 50) * 250_000
-    value += (marketSalary - p.contract.salary) / 1000
+    const market = marketSalary(p.ratings.overall, p.age)
+    value += (market - p.contract.salary) / 1000
   }
 
   return Math.max(0, value)
@@ -47,8 +52,23 @@ export function evaluateTrade(
   const valueLeaving = leaving.reduce((sum, p) => sum + playerValue(p), 0)
   const valueEntering = entering.reduce((sum, p) => sum + playerValue(p), 0)
 
-  if (valueEntering < valueLeaving * 0.9) {
+  // The better the best player they're giving up, the less willing a real
+  // team is to do it without a genuinely comparable piece coming back -
+  // no team hands over a 95 overall starter for a stack of 55-60 depth
+  // guys just because the raw point totals happen to line up.
+  const maxLeavingOverall = leaving.reduce((max, p) => Math.max(max, p.ratings.overall), 0)
+  const requiredRatio =
+    maxLeavingOverall >= 90 ? 1.5 : maxLeavingOverall >= 85 ? 1.3 : maxLeavingOverall >= 75 ? 1.15 : 1.05
+
+  if (valueEntering < valueLeaving * requiredRatio) {
     return { accepted: false, reason: 'Not enough value coming back' }
+  }
+
+  if (
+    maxLeavingOverall >= 88 &&
+    entering.every((p) => p.ratings.overall < maxLeavingOverall - 15)
+  ) {
+    return { accepted: false, reason: "They won't give up a player that good without a comparable player coming back" }
   }
 
   const leavingIds = new Set(leaving.map((p) => p.id))

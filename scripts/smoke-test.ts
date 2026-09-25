@@ -3,15 +3,19 @@ import { db } from '../src/db'
 import {
   advanceToFreeAgency,
   createLeague,
+  cutPlayer,
   deleteLeague,
   getSeasonHistory,
+  openFreeAgency,
   previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
   signFreeAgent,
   simWeek,
 } from '../src/engine/league'
-import { MIN_OVERALL } from '../src/engine/players'
+import { computeCapSpace } from '../src/engine/freeAgency'
+import { MIN_OVERALL, rosterNeeds } from '../src/engine/players'
+import { marketSalary } from '../src/engine/salary'
 import { computeStandings } from '../src/engine/standings'
 import { playerValue } from '../src/engine/trades'
 
@@ -192,12 +196,20 @@ async function main() {
     const badTrade = await proposeTrade(startLeague.userTeamId!, otherTeam.id, [myWorst.id], [theirBest.id])
     if (badTrade.accepted) throw new Error('AI accepted a lopsided trade in the user\'s favor')
 
+    // Trades now require the responding team (otherTeam, giving up `theirs`
+    // and receiving `mine`) to come out ahead on value - more so the better
+    // the player they're giving up. "Fair" here means finding a
+    // same-position pair where what otherTeam receives (mine) is modestly
+    // better than what they send away (theirs), not exactly equal value.
     let closest: { mine: (typeof myRoster)[number]; theirs: (typeof theirRoster)[number]; diff: number } | null =
       null
     for (const mine of myRoster) {
       for (const theirs of theirRoster) {
         if (mine.position !== theirs.position) continue
-        const diff = Math.abs(playerValue(mine) - playerValue(theirs))
+        const mineValue = playerValue(mine)
+        const theirsValue = playerValue(theirs)
+        if (theirsValue <= 0 || mineValue < theirsValue * 1.2) continue
+        const diff = mineValue / theirsValue - 1.2
         if (!closest || diff < closest.diff) closest = { mine, theirs, diff }
       }
     }
@@ -249,6 +261,44 @@ async function main() {
     console.log('OK: injuries occurred over the season')
   })()
 
+  await (async () => {
+    // Usage should be concentrated on the best players at each position, not
+    // spread evenly across the whole depth chart.
+    const stats = await db.playerGameStats.where('leagueId').equals(leagueId).toArray()
+    const players = await db.players.toArray()
+
+    const totalByPlayer = new Map<number, number>()
+    for (const s of stats) {
+      const total = s.rushYards + s.recYards
+      totalByPlayer.set(s.playerId, (totalByPlayer.get(s.playerId) ?? 0) + total)
+    }
+
+    const rbs = players.filter((p) => p.position === 'RB' && p.teamId != null)
+    const byTeam = new Map<number, typeof rbs>()
+    for (const p of rbs) {
+      const list = byTeam.get(p.teamId!) ?? []
+      list.push(p)
+      byTeam.set(p.teamId!, list)
+    }
+    let starterHeavyTeams = 0
+    let comparedTeams = 0
+    for (const [, teamRbs] of byTeam) {
+      if (teamRbs.length < 2) continue
+      const sorted = [...teamRbs].sort((a, b) => b.ratings.overall - a.ratings.overall)
+      const starterYards = totalByPlayer.get(sorted[0].id) ?? 0
+      const backupYards = totalByPlayer.get(sorted[sorted.length - 1].id) ?? 0
+      comparedTeams++
+      if (starterYards > backupYards) starterHeavyTeams++
+    }
+    console.log(
+      `RB usage: starter out-produced deepest backup on ${starterHeavyTeams}/${comparedTeams} teams`,
+    )
+    if (comparedTeams > 0 && starterHeavyTeams / comparedTeams < 0.8) {
+      throw new Error('RB touches are not concentrated on starters as expected')
+    }
+    console.log('OK: usage is concentrated on top players')
+  })()
+
   console.log('OK: season 1 smoke test passed')
 
   const ratingsBefore = new Map(
@@ -272,11 +322,28 @@ async function main() {
   )
   if (changed.length === 0) throw new Error('No player ratings changed during progression')
 
-  const leagueInFA = await db.leagues.get(leagueId)
+  const leagueInResign = await db.leagues.get(leagueId)
   console.log('free agency:', faResult)
+  console.log('season during resign window:', leagueInResign?.season, leagueInResign?.phase)
+  if (leagueInResign?.phase !== 'resign') throw new Error('League did not enter the resign phase')
+  if (leagueInResign.season !== league.season + 1) throw new Error('Season number did not increment')
+  if (leagueInResign.userTeamId == null) throw new Error('League has no user team')
+
+  // Cutting a player during the resign window should free them to the pool
+  // and immediately open up cap space.
+  const resignRoster = await db.players.where('teamId').equals(leagueInResign.userTeamId).toArray()
+  const cutCandidate = resignRoster.sort((a, b) => a.ratings.overall - b.ratings.overall)[0]
+  await cutPlayer(leagueId, cutCandidate.id)
+  const afterCut = await db.players.get(cutCandidate.id)
+  if (afterCut?.teamId !== null || afterCut?.contract !== null) {
+    throw new Error('cutPlayer did not release the player to free agency')
+  }
+  console.log('OK: cut a player during the resign window')
+
+  await openFreeAgency(leagueId)
+  const leagueInFA = await db.leagues.get(leagueId)
   console.log('season during free agency:', leagueInFA?.season, leagueInFA?.phase)
   if (leagueInFA?.phase !== 'freeagency') throw new Error('League did not enter free agency phase')
-  if (leagueInFA.season !== league.season + 1) throw new Error('Season number did not increment')
 
   // The user's team should have been excluded from AI free agency, leaving
   // it with open roster needs to fill manually.
@@ -294,7 +361,17 @@ async function main() {
   )
   if (stillFreeAgents.length === 0) throw new Error('Expected some free agents left for the user to sign')
 
-  const targetFA = stillFreeAgents.sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+  // Elite free agents now cost real-NFL-scale money, so the top overall
+  // talent on the board may not fit under the user's remaining cap space -
+  // that's intentional (no more stacking a dozen 90-overalls for pennies).
+  // Sign the best one that's actually affordable.
+  const userCapSpace = computeCapSpace(userRosterBeforeSigning)
+  const userNeeds = rosterNeeds(userRosterBeforeSigning)
+  const affordableFAs = stillFreeAgents
+    .filter((p) => userNeeds.includes(p.position) && marketSalary(p.ratings.overall, p.age) * 1.15 <= userCapSpace)
+    .sort((a, b) => b.ratings.overall - a.ratings.overall)
+  if (affordableFAs.length === 0) throw new Error('Expected at least one affordable free agent')
+  const targetFA = affordableFAs[0]
   await signFreeAgent(leagueId, targetFA.id)
   const signedPlayer = await db.players.get(targetFA.id)
   if (signedPlayer?.teamId !== leagueInFA.userTeamId) {
