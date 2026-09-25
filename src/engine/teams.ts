@@ -45,7 +45,7 @@ const TEAM_SEED: TeamSeed[] = [
   { region: 'Seattle', name: 'Seahawks', abbrev: 'SEA', colors: ['#002244', '#69be28'], conference: 'NFC', division: 'West' },
 ]
 
-const SALARY_CAP = 224_000_000
+export const SALARY_CAP = 224_000_000
 
 export function generateTeams(): Omit<Team, 'id'>[] {
   return TEAM_SEED.map((t) => ({ ...t, capSpace: SALARY_CAP }))

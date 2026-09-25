@@ -1,8 +1,9 @@
 import { db } from '../db'
 import type { Conference, GameResult, Player, PlayoffRound, Team } from '../types'
 import { runDraft } from './draft'
+import { computeCapSpace, expireContracts, runFreeAgency } from './freeAgency'
 import { simGame } from './gameSim'
-import { generateRosterForTeam } from './players'
+import { generateRosterForTeam, rosterNeeds } from './players'
 import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
@@ -244,52 +245,125 @@ export async function simWeek(leagueId: number) {
   }
 }
 
+async function draftOrderFor(leagueId: number, season: number, teams: Team[]) {
+  const regularGames = await currentSeasonRegularGames(leagueId, season)
+  const standings = computeStandings(teams, regularGames)
+  return [...standings].reverse().map((s) => s.teamId)
+}
+
 /**
- * Offseason: ages every player a year (with retirements), then runs a
- * worst-record-picks-first draft to refill each team back to a full roster,
- * and rolls the league into a fresh regular season.
+ * Offseason step 1: ages every player a year (with retirements and rating
+ * progression) and lets contracts expire into free agency, then pauses the
+ * league in the 'freeagency' phase. AI teams deliberately do NOT sign
+ * anyone yet - the user gets an uncontested shopping window here; AI
+ * signing only happens once they click through to the draft (proceedToDraft),
+ * so the whole pool isn't gone before they ever see the free agent list.
  */
-export async function advanceToNextSeason(leagueId: number) {
+export async function advanceToFreeAgency(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
   if (league.phase !== 'complete') throw new Error('Season is not finished yet')
 
   const rng = createRng(league.season * 7919 + 1)
-  const teams = await db.teams.toArray()
   const allPlayers = await db.players.toArray()
 
   const { retiredIds, agedPlayers } = ageAndRetire(rng, allPlayers)
   const progressedPlayers = agedPlayers.map((p) => progressPlayer(rng, p))
+  const expiredPlayers = expireContracts(progressedPlayers)
   if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
-  await db.players.bulkPut(progressedPlayers as never[])
+  await db.players.bulkPut(expiredPlayers as never[])
+
+  const freeAgentCount = expiredPlayers.filter((p) => p.teamId === null).length
+
+  const nextSeason = league.season + 1
+  await db.leagues.update(leagueId, {
+    season: nextSeason,
+    phase: 'freeagency',
+    champTeamId: null,
+  })
+
+  return { retiredCount: retiredIds.length, freeAgentCount }
+}
+
+/** Signs an available free agent to the user's team during the free agency window. */
+export async function signFreeAgent(leagueId: number, playerId: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) throw new Error('League not found')
+  if (league.phase !== 'freeagency') throw new Error('Not in the free agency window')
+  if (league.userTeamId == null) throw new Error('League has no user team')
+
+  const player = await db.players.get(playerId)
+  if (!player || player.teamId !== null) throw new Error('Player is not a free agent')
+
+  const roster = await db.players.where('teamId').equals(league.userTeamId).toArray()
+  if (!rosterNeeds(roster).includes(player.position)) {
+    throw new Error(`Roster already full at ${player.position}`)
+  }
+
+  const capSpace = computeCapSpace(roster)
+  const rng = createRng(league.season * 7919 + playerId)
+  const salary = Math.round((500_000 + Math.max(0, player.ratings.overall - 50) * 250_000) * (0.85 + rng() * 0.3))
+  if (salary > capSpace) throw new Error('Not enough cap space to sign this player')
+
+  await db.players.update(playerId, {
+    teamId: league.userTeamId,
+    contract: { salary, yearsLeft: 1 + Math.floor(rng() * 3) },
+  })
+}
+
+/**
+ * Offseason step 2: closes the user's free agency window by running AI
+ * free agency (every team except the user's, signing from whatever's left
+ * in the pool), then the rookie draft to fill every team's remaining needs
+ * (including the user's), generates the new season's schedule, and starts
+ * the regular season.
+ */
+export async function proceedToDraft(leagueId: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) throw new Error('League not found')
+  if (league.phase !== 'freeagency') throw new Error('Not in the free agency window')
+
+  const rng = createRng(league.season * 7919 + 2)
+  const teams = await db.teams.toArray()
+  const allPlayers = await db.players.toArray()
+  const draftOrderTeamIds = await draftOrderFor(leagueId, league.season - 1, teams)
 
   const rostersByTeam = new Map<number, Player[]>()
   for (const team of teams) {
     rostersByTeam.set(
       team.id,
-      agedPlayers.filter((p) => p.teamId === team.id),
+      allPlayers.filter((p) => p.teamId === team.id),
     )
   }
-
-  const regularGames = await currentSeasonRegularGames(leagueId, league.season)
-  const standings = computeStandings(teams, regularGames)
-  const draftOrderTeamIds = [...standings].reverse().map((s) => s.teamId)
+  const freeAgents = allPlayers.filter((p) => p.teamId === null)
+  const excludeTeamIds = new Set(league.userTeamId != null ? [league.userTeamId] : [])
+  const signings = runFreeAgency(
+    rng,
+    teams,
+    rostersByTeam,
+    freeAgents,
+    draftOrderTeamIds,
+    excludeTeamIds,
+  )
+  if (signings.length > 0) {
+    await db.players.bulkPut(signings.map((s) => s.player) as never[])
+    for (const s of signings) {
+      rostersByTeam.get(s.teamId)?.push(s.player as Player)
+    }
+  }
 
   const picks = runDraft(rng, teams, rostersByTeam, draftOrderTeamIds)
   if (picks.length > 0) {
     await db.players.bulkAdd(picks.map((p) => p.player) as never[])
   }
 
-  const nextSeason = league.season + 1
-  const regularSeasonWeeks = await generateAndStoreSchedule(leagueId, teams, nextSeason, rng)
+  const regularSeasonWeeks = await generateAndStoreSchedule(leagueId, teams, league.season, rng)
 
   await db.leagues.update(leagueId, {
-    season: nextSeason,
     week: 1,
     regularSeasonWeeks,
     phase: 'regular',
-    champTeamId: null,
   })
 
-  return { retiredCount: retiredIds.length, draftedCount: picks.length }
+  return { draftedCount: picks.length }
 }

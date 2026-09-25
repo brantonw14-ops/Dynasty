@@ -1,24 +1,6 @@
 import type { Player, Position, Team } from '../types'
-import { generatePlayer } from './players'
+import { generatePlayer, rosterNeeds } from './players'
 import { randInt, type Rng } from './rng'
-
-// Target roster shape, mirrored from players.ts ROSTER_SHAPE.
-const ROSTER_SHAPE: Record<Position, number> = {
-  QB: 3, RB: 4, WR: 6, TE: 3, OL: 9, DL: 8, LB: 7, CB: 6, S: 4, K: 1, P: 1,
-}
-
-function rosterNeeds(roster: Player[]): Position[] {
-  const counts: Partial<Record<Position, number>> = {}
-  for (const p of roster) counts[p.position] = (counts[p.position] ?? 0) + 1
-
-  const needs: Position[] = []
-  for (const pos of Object.keys(ROSTER_SHAPE) as Position[]) {
-    const have = counts[pos] ?? 0
-    const want = ROSTER_SHAPE[pos]
-    for (let i = have; i < want; i++) needs.push(pos)
-  }
-  return needs
-}
 
 export interface DraftPick {
   teamId: number

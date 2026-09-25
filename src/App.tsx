@@ -1,7 +1,16 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
 import { db } from './db'
-import { advanceToNextSeason, createLeague, deleteLeague, simWeek } from './engine/league'
+import {
+  advanceToFreeAgency,
+  createLeague,
+  deleteLeague,
+  proceedToDraft,
+  signFreeAgent,
+  simWeek,
+} from './engine/league'
+import { computeCapSpace } from './engine/freeAgency'
+import { rosterNeeds } from './engine/players'
 import { computeStandings } from './engine/standings'
 import { TEAM_PREVIEWS } from './engine/teams'
 import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
@@ -84,6 +93,116 @@ function RosterView({ teamId }: { teamId: number }) {
   )
 }
 
+function FreeAgencyView({
+  leagueId,
+  userTeamId,
+  onProceedToDraft,
+}: {
+  leagueId: number
+  userTeamId: number
+  onProceedToDraft: () => void
+}) {
+  const roster = useLiveQuery(
+    () => db.players.where('teamId').equals(userTeamId).toArray(),
+    [userTeamId],
+  )
+  const freeAgents = useLiveQuery(
+    () => db.players.filter((p) => p.teamId === null).toArray(),
+    [leagueId],
+  )
+  const [signingId, setSigningId] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [advancing, setAdvancing] = useState(false)
+
+  if (!roster || !freeAgents) return <p className="text-sm text-gray-500">Loading free agents...</p>
+
+  const needs = rosterNeeds(roster)
+  const capSpace = computeCapSpace(roster)
+  const sorted = [...freeAgents].sort((a, b) => b.ratings.overall - a.ratings.overall)
+
+  const handleSign = async (playerId: number) => {
+    setError(null)
+    setSigningId(playerId)
+    try {
+      await signFreeAgent(leagueId, playerId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSigningId(null)
+    }
+  }
+
+  const handleProceed = async () => {
+    setAdvancing(true)
+    try {
+      await proceedToDraft(leagueId)
+      onProceedToDraft()
+    } finally {
+      setAdvancing(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-gray-500">
+          Cap space {formatMoney(capSpace)} &middot; Needs:{' '}
+          {needs.length > 0 ? [...new Set(needs)].join(', ') : 'roster full'}
+        </p>
+        <button
+          onClick={handleProceed}
+          disabled={advancing}
+          className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50"
+        >
+          {advancing ? 'Running draft...' : 'Proceed to Draft'}
+        </button>
+      </div>
+
+      {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="text-left text-gray-400 border-b">
+            <th className="py-1">Name</th>
+            <th className="py-1">Pos</th>
+            <th className="py-1 text-right">Age</th>
+            <th className="py-1 text-right">OVR</th>
+            <th className="py-1"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((p) => (
+            <tr key={p.id} className="border-b">
+              <td className="py-1">
+                {p.firstName} {p.lastName}
+              </td>
+              <td className="py-1">{p.position}</td>
+              <td className="py-1 text-right">{p.age}</td>
+              <td className="py-1 text-right">{p.ratings.overall}</td>
+              <td className="py-1 text-right">
+                <button
+                  onClick={() => handleSign(p.id)}
+                  disabled={signingId === p.id || !needs.includes(p.position)}
+                  className="px-2 py-1 border rounded text-xs disabled:opacity-40"
+                >
+                  {signingId === p.id ? 'Signing...' : 'Sign'}
+                </button>
+              </td>
+            </tr>
+          ))}
+          {sorted.length === 0 && (
+            <tr>
+              <td colSpan={5} className="text-sm text-gray-500 py-2">
+                No free agents available.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function StandingsTable({
   teams,
   regularGames,
@@ -161,7 +280,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const handleAdvanceSeason = async () => {
     setAdvancing(true)
     try {
-      await advanceToNextSeason(leagueId)
+      await advanceToFreeAgency(leagueId)
     } finally {
       setAdvancing(false)
     }
@@ -202,7 +321,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
               ? `Week ${league.week} of ${league.regularSeasonWeeks}`
               : league.phase === 'playoffs'
                 ? 'Playoffs'
-                : 'Complete'}
+                : league.phase === 'freeagency'
+                  ? 'Free Agency'
+                  : 'Complete'}
             {league.userTeamId != null && <> &middot; Your team: {teamName(league.userTeamId)}</>}
           </p>
         </div>
@@ -213,9 +334,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
               disabled={advancing}
               className="px-4 py-2 bg-green-600 text-white rounded-md disabled:opacity-50"
             >
-              {advancing ? 'Advancing...' : `Advance to ${league.season + 1} Season`}
+              {advancing ? 'Advancing...' : `Start ${league.season + 1} Offseason`}
             </button>
-          ) : (
+          ) : league.phase === 'freeagency' ? null : (
             <button
               onClick={handleSimWeek}
               disabled={simming}
@@ -240,71 +361,84 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
         </div>
       )}
 
-      <div className="flex gap-4 border-b mb-6">
-        <button
-          onClick={() => setTab('league')}
-          className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-            tab === 'league' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-          }`}
-        >
-          League
-        </button>
-        {league.userTeamId != null && (
-          <button
-            onClick={() => setTab('roster')}
-            className={`px-1 py-2 text-sm border-b-2 -mb-px ${
-              tab === 'roster' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
-            }`}
-          >
-            My Roster
-          </button>
-        )}
-      </div>
-
-      {tab === 'roster' && league.userTeamId != null && <RosterView teamId={league.userTeamId} />}
-
-      {tab === 'league' && (
+      {league.phase === 'freeagency' && league.userTeamId != null ? (
         <>
-          <h2 className="text-lg font-medium mb-2">Standings</h2>
-          <StandingsTable teams={teams} regularGames={regularGames} teamName={teamName} />
-
-          {ROUND_ORDER.some((r) => (playoffGamesByRound.get(r)?.length ?? 0) > 0) && (
-            <div className="mb-8">
-              <h2 className="text-lg font-medium mb-2">Playoffs</h2>
-              {ROUND_ORDER.map((round) => {
-                const roundGames = playoffGamesByRound.get(round) ?? []
-                if (roundGames.length === 0) return null
-                return (
-                  <div key={round} className="mb-3">
-                    <h3 className="text-xs font-semibold text-gray-500 mb-1">
-                      {ROUND_LABELS[round]}
-                    </h3>
-                    <ul className="space-y-1">
-                      {roundGames.map((g) => (
-                        <li key={g.id} className="text-sm border-b py-1">
-                          {teamName(g.awayTeamId)} {g.awayScore} @ {teamName(g.homeTeamId)}{' '}
-                          {g.homeScore}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-
-          <h2 className="text-lg font-medium mb-2">Results</h2>
-          <ul className="space-y-1">
-            {[...regularGames].reverse().map((g) => (
-              <li key={g.id} className="text-sm border-b py-1">
-                Wk{g.week}: {teamName(g.awayTeamId)} {g.awayScore} @ {teamName(g.homeTeamId)}{' '}
-                {g.homeScore}
-              </li>
-            ))}
-            {regularGames.length === 0 && (
-              <li className="text-sm text-gray-500">No games simmed yet.</li>
+          <h2 className="text-lg font-medium mb-2">Free Agency</h2>
+          <FreeAgencyView
+            leagueId={leagueId}
+            userTeamId={league.userTeamId}
+            onProceedToDraft={() => setTab('league')}
+          />
+        </>
+      ) : (
+        <>
+          <div className="flex gap-4 border-b mb-6">
+            <button
+              onClick={() => setTab('league')}
+              className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                tab === 'league' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+              }`}
+            >
+              League
+            </button>
+            {league.userTeamId != null && (
+              <button
+                onClick={() => setTab('roster')}
+                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                  tab === 'roster' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+                }`}
+              >
+                My Roster
+              </button>
             )}
-          </ul>
+          </div>
+
+          {tab === 'roster' && league.userTeamId != null && <RosterView teamId={league.userTeamId} />}
+
+          {tab === 'league' && (
+            <>
+              <h2 className="text-lg font-medium mb-2">Standings</h2>
+              <StandingsTable teams={teams} regularGames={regularGames} teamName={teamName} />
+
+              {ROUND_ORDER.some((r) => (playoffGamesByRound.get(r)?.length ?? 0) > 0) && (
+                <div className="mb-8">
+                  <h2 className="text-lg font-medium mb-2">Playoffs</h2>
+                  {ROUND_ORDER.map((round) => {
+                    const roundGames = playoffGamesByRound.get(round) ?? []
+                    if (roundGames.length === 0) return null
+                    return (
+                      <div key={round} className="mb-3">
+                        <h3 className="text-xs font-semibold text-gray-500 mb-1">
+                          {ROUND_LABELS[round]}
+                        </h3>
+                        <ul className="space-y-1">
+                          {roundGames.map((g) => (
+                            <li key={g.id} className="text-sm border-b py-1">
+                              {teamName(g.awayTeamId)} {g.awayScore} @ {teamName(g.homeTeamId)}{' '}
+                              {g.homeScore}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              <h2 className="text-lg font-medium mb-2">Results</h2>
+              <ul className="space-y-1">
+                {[...regularGames].reverse().map((g) => (
+                  <li key={g.id} className="text-sm border-b py-1">
+                    Wk{g.week}: {teamName(g.awayTeamId)} {g.awayScore} @ {teamName(g.homeTeamId)}{' '}
+                    {g.homeScore}
+                  </li>
+                ))}
+                {regularGames.length === 0 && (
+                  <li className="text-sm text-gray-500">No games simmed yet.</li>
+                )}
+              </ul>
+            </>
+          )}
         </>
       )}
     </div>

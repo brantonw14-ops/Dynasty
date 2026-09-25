@@ -5,8 +5,21 @@ import { randInt, randNormal, type Rng } from './rng'
 const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
 
 // Roughly how many of each position a 53-man roster carries.
-const ROSTER_SHAPE: Record<Position, number> = {
+export const ROSTER_SHAPE: Record<Position, number> = {
   QB: 3, RB: 4, WR: 6, TE: 3, OL: 9, DL: 8, LB: 7, CB: 6, S: 4, K: 1, P: 1,
+}
+
+export function rosterNeeds(roster: Player[]): Position[] {
+  const counts: Partial<Record<Position, number>> = {}
+  for (const p of roster) counts[p.position] = (counts[p.position] ?? 0) + 1
+
+  const needs: Position[] = []
+  for (const pos of Object.keys(ROSTER_SHAPE) as Position[]) {
+    const have = counts[pos] ?? 0
+    const want = ROSTER_SHAPE[pos]
+    for (let i = have; i < want; i++) needs.push(pos)
+  }
+  return needs
 }
 
 function clamp(n: number, min = 40, max = 99) {

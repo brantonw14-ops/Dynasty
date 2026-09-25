@@ -1,6 +1,13 @@
 import 'fake-indexeddb/auto'
 import { db } from '../src/db'
-import { advanceToNextSeason, createLeague, deleteLeague, simWeek } from '../src/engine/league'
+import {
+  advanceToFreeAgency,
+  createLeague,
+  deleteLeague,
+  proceedToDraft,
+  signFreeAgent,
+  simWeek,
+} from '../src/engine/league'
 import { computeStandings } from '../src/engine/standings'
 
 const MAX_WEEKS = 40
@@ -99,8 +106,8 @@ async function main() {
   )
 
   const rosterCountBefore = await db.players.count()
-  const offseasonResult = await advanceToNextSeason(leagueId)
-  const rosterCountAfter = await db.players.count()
+  const faResult = await advanceToFreeAgency(leagueId)
+  const rosterCountAfterFA = await db.players.count()
 
   const survivors = await db.players.toArray()
   const changed = survivors.filter(
@@ -114,21 +121,52 @@ async function main() {
     'returning players changed overall rating',
   )
   if (changed.length === 0) throw new Error('No player ratings changed during progression')
+
+  const leagueInFA = await db.leagues.get(leagueId)
+  console.log('free agency:', faResult)
+  console.log('season during free agency:', leagueInFA?.season, leagueInFA?.phase)
+  if (leagueInFA?.phase !== 'freeagency') throw new Error('League did not enter free agency phase')
+  if (leagueInFA.season !== league.season + 1) throw new Error('Season number did not increment')
+
+  // The user's team should have been excluded from AI free agency, leaving
+  // it with open roster needs to fill manually.
+  if (leagueInFA.userTeamId == null) throw new Error('League has no user team')
+  const userRosterBeforeSigning = await db.players
+    .where('teamId')
+    .equals(leagueInFA.userTeamId)
+    .toArray()
+  const stillFreeAgents = (await db.players.toArray()).filter((p) => p.teamId === null)
+  console.log(
+    'user roster size before signing:',
+    userRosterBeforeSigning.length,
+    'free agents available:',
+    stillFreeAgents.length,
+  )
+  if (stillFreeAgents.length === 0) throw new Error('Expected some free agents left for the user to sign')
+
+  const targetFA = stillFreeAgents.sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+  await signFreeAgent(leagueId, targetFA.id)
+  const signedPlayer = await db.players.get(targetFA.id)
+  if (signedPlayer?.teamId !== leagueInFA.userTeamId) {
+    throw new Error('signFreeAgent did not actually assign the player to the user team')
+  }
+  if (!signedPlayer.contract) throw new Error('Signed player has no contract')
+  console.log('OK: signed a free agent to the user team')
+
+  const draftResult = await proceedToDraft(leagueId)
+  const rosterCountAfter = await db.players.count()
   const leagueAfterOffseason = await db.leagues.get(leagueId)
 
-  console.log('offseason:', offseasonResult)
-  console.log('roster count before/after:', rosterCountBefore, rosterCountAfter)
+  console.log('draft:', draftResult)
+  console.log('roster count before/after FA+draft:', rosterCountBefore, rosterCountAfterFA, rosterCountAfter)
   console.log('season after offseason:', leagueAfterOffseason?.season, leagueAfterOffseason?.phase)
 
   if (leagueAfterOffseason?.phase !== 'regular' || leagueAfterOffseason.week !== 1) {
     throw new Error('League did not roll into a fresh regular season')
   }
-  if (leagueAfterOffseason.season !== league.season + 1) {
-    throw new Error('Season number did not increment')
-  }
   if (
     rosterCountAfter !==
-    rosterCountBefore - offseasonResult.retiredCount + offseasonResult.draftedCount
+    rosterCountBefore - faResult.retiredCount + draftResult.draftedCount
   ) {
     throw new Error('Roster count after offseason does not reconcile with retirements/draft picks')
   }
