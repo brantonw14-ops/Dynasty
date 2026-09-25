@@ -46,6 +46,8 @@ export interface Team {
   capSpace: number
 }
 
+export type PlayoffRound = 'semifinal' | 'final'
+
 export interface GameResult {
   id: number
   leagueId: number
@@ -55,6 +57,7 @@ export interface GameResult {
   awayTeamId: number
   homeScore: number
   awayScore: number
+  round?: PlayoffRound
 }
 
 export interface ScheduledGame {
@@ -66,10 +69,14 @@ export interface ScheduledGame {
   awayTeamId: number
 }
 
+export type LeaguePhase = 'regular' | 'playoffs' | 'complete'
+
 export interface League {
   id: number
   name: string
   season: number
   week: number
+  phase: LeaguePhase
+  champTeamId: number | null
   createdAt: number
 }
