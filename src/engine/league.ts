@@ -3,6 +3,7 @@ import type { Conference, DraftPickLogEntry, Division, GameResult, Player, Playo
 import { generateDraftClass, prospectToPlayer, type CollegeProspect } from './draft'
 import { computeCapSpace, expireContractsWithAiRetention, runFreeAgency } from './freeAgency'
 import { simGame, type PlayerBoxScore } from './gameSim'
+import { applyGamePerformance } from './inSeasonProgression'
 import { advanceInjuries, rollNewInjuries } from './injuries'
 import { classifyTeamOutlook, generateRosterForTeam, nextDepthOrder, rosterNeeds, type TeamOutlook } from './players'
 import { progressPlayer } from './progression'
@@ -186,10 +187,12 @@ async function simRegularSeasonWeek(leagueId: number) {
     .toArray()
   const rng = createRng(league.season * 1000 + league.week)
 
-  // Collect all injury updates across the whole week's games and write them
-  // in one bulkPut at the end - one bulkPut per game (32/week at full
-  // strength) was the difference between a week taking ~100ms and ~7s.
-  const playerUpdates: Player[] = []
+  // Collect all injury/performance updates across the whole week's games
+  // and write them in one bulkPut at the end - one bulkPut per game (32/week
+  // at full strength) was the difference between a week taking ~100ms and
+  // ~7s. Merged by player id since injuries and performance nudges are
+  // computed independently and must not clobber each other.
+  const playerUpdateMap = new Map<number, Player>()
 
   for (const g of weekGames) {
     const homeRosterFull = await db.players.where('teamId').equals(g.homeTeamId).toArray()
@@ -209,14 +212,18 @@ async function simRegularSeasonWeek(leagueId: number) {
     await persistBoxScore(leagueId, league.season, league.week, gameId as number, g.homeTeamId, result.homeBox)
     await persistBoxScore(leagueId, league.season, league.week, gameId as number, g.awayTeamId, result.awayBox)
 
-    playerUpdates.push(
+    mergePlayerUpdates(playerUpdateMap, [...homeRosterFull, ...awayRosterFull], [
       ...changedInjuries(homeRosterFull, rollNewInjuries(rng, homeRosterFull)),
       ...changedInjuries(awayRosterFull, rollNewInjuries(rng, awayRosterFull)),
-    )
+    ])
+    mergePlayerUpdates(playerUpdateMap, [...homeRoster, ...awayRoster], [
+      ...applyGamePerformance(rng, homeRoster, result.homeBox),
+      ...applyGamePerformance(rng, awayRoster, result.awayBox),
+    ])
   }
 
-  if (playerUpdates.length > 0) {
-    await db.players.bulkPut(playerUpdates as never[])
+  if (playerUpdateMap.size > 0) {
+    await db.players.bulkPut([...playerUpdateMap.values()] as never[])
   }
 
   const nextWeek = league.week + 1
@@ -274,16 +281,41 @@ async function playGame(
   await persistBoxScore(leagueId, season, week, gameId as number, homeTeamId, result.homeBox)
   await persistBoxScore(leagueId, season, week, gameId as number, awayTeamId, result.awayBox)
 
-  const changed = [
+  const updateMap = new Map<number, Player>()
+  mergePlayerUpdates(updateMap, [...homeRosterFull, ...awayRosterFull], [
     ...changedInjuries(homeRosterFull, rollNewInjuries(rng, homeRosterFull)),
     ...changedInjuries(awayRosterFull, rollNewInjuries(rng, awayRosterFull)),
-  ]
-  if (changed.length > 0) await db.players.bulkPut(changed as never[])
+  ])
+  mergePlayerUpdates(updateMap, [...homeRoster, ...awayRoster], [
+    ...applyGamePerformance(rng, homeRoster, result.homeBox),
+    ...applyGamePerformance(rng, awayRoster, result.awayBox),
+  ])
+  if (updateMap.size > 0) await db.players.bulkPut([...updateMap.values()] as never[])
 }
 
 /** Only the players whose injury actually changed - rollNewInjuries returns the same reference for the rest. */
 function changedInjuries(before: Player[], after: Player[]): Player[] {
   return after.filter((p, i) => p !== before[i])
+}
+
+/**
+ * Folds a batch of updates (full player objects from injuries, or partial
+ * {id, ...changedFields} from performance nudges) into an accumulator map,
+ * on top of whatever's already there for that player (falling back to
+ * `base` the first time) - so injury and performance updates for the same
+ * player in the same game merge instead of one clobbering the other.
+ */
+function mergePlayerUpdates(
+  map: Map<number, Player>,
+  base: Player[],
+  updates: (Player | ({ id: number } & Partial<Player>))[],
+) {
+  const baseById = new Map(base.map((p) => [p.id, p]))
+  for (const u of updates) {
+    const current = map.get(u.id) ?? baseById.get(u.id)
+    if (!current) continue
+    map.set(u.id, { ...current, ...u })
+  }
 }
 
 /** Reseeds a set of remaining playoff teams: best seed vs worst, others paired in order. */
@@ -575,6 +607,27 @@ export async function moveDepthChart(teamId: number, playerId: number, direction
     { ...player, depthOrder: other.depthOrder },
     { ...other, depthOrder: player.depthOrder },
   ] as never[])
+}
+
+/** Resets the whole team's depth chart to best-overall-first at every position - one click instead of reordering by hand. */
+export async function optimizeDepthChart(teamId: number) {
+  const roster = await db.players.where('teamId').equals(teamId).toArray()
+  const byPosition = new Map<Position, Player[]>()
+  for (const p of roster) {
+    const list = byPosition.get(p.position) ?? []
+    list.push(p)
+    byPosition.set(p.position, list)
+  }
+
+  const updates: Player[] = []
+  for (const group of byPosition.values()) {
+    const sorted = [...group].sort((a, b) => b.ratings.overall - a.ratings.overall)
+    sorted.forEach((p, i) => {
+      if (p.depthOrder !== i) updates.push({ ...p, depthOrder: i })
+    })
+  }
+
+  if (updates.length > 0) await db.players.bulkPut(updates as never[])
 }
 
 /**

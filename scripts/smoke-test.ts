@@ -10,6 +10,7 @@ import {
   getSeasonHistory,
   makeUserDraftPick,
   moveDepthChart,
+  optimizeDepthChart,
   openFreeAgency,
   previewLeagueTeams,
   proposeTrade,
@@ -511,6 +512,39 @@ async function main() {
       throw new Error('moveDepthChart did not promote the backup RB to the top of the depth chart')
     }
     console.log('OK: depth chart reordering swaps players correctly')
+  })()
+
+  await (async () => {
+    // Best Roster should reset every position to best-overall-first,
+    // undoing the manual bench move above.
+    const leagueNow = (await db.leagues.get(leagueId))!
+    if (leagueNow.userTeamId == null) throw new Error('League has no user team')
+    await optimizeDepthChart(leagueNow.userTeamId)
+    const rbGroup = (await db.players.where('teamId').equals(leagueNow.userTeamId).toArray())
+      .filter((p) => p.position === 'RB')
+      .sort((a, b) => a.depthOrder - b.depthOrder)
+    for (let i = 0; i < rbGroup.length - 1; i++) {
+      if (rbGroup[i].ratings.overall < rbGroup[i + 1].ratings.overall) {
+        throw new Error('optimizeDepthChart did not sort RBs best-overall-first')
+      }
+    }
+    console.log('OK: Best Roster sorts every position best-overall-first')
+  })()
+
+  await (async () => {
+    // In-season performance should occasionally move ratings and set a
+    // trend arrow - not every player every week (too noisy), but some
+    // signal should show up over a full season league-wide.
+    const players = await db.players.toArray()
+    const trending = players.filter((p) => p.trend === 'up' || p.trend === 'down')
+    console.log(`players with a trend set after season 1: ${trending.length} of ${players.length}`)
+    if (trending.length === 0) throw new Error('Expected at least some players to have a trend set after a full season')
+    for (const p of trending) {
+      if (p.ratings.overall < 40 || p.ratings.overall > p.ratings.potential) {
+        throw new Error(`Player ${p.id} overall ${p.ratings.overall} out of bounds (potential ${p.ratings.potential})`)
+      }
+    }
+    console.log('OK: in-season performance nudges ratings and sets trend within bounds')
   })()
 
   await (async () => {

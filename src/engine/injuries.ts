@@ -1,8 +1,12 @@
 import type { Player } from '../types'
 import { randInt, type Rng } from './rng'
 
+// Potential is a hard ceiling - it must never sit below the player's own
+// current overall (a real bug once let it drift up to 10 points under,
+// which combined with in-season rating growth could push overall above
+// its own "ceiling").
 function clampPotential(n: number, overall: number) {
-  return Math.max(Math.max(40, overall - 10), Math.min(99, Math.round(n)))
+  return Math.max(overall, Math.min(99, Math.round(n)))
 }
 
 /** How many points of ceiling (1-5) a fresh injury costs a player, scaled by severity. */

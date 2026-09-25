@@ -51,6 +51,12 @@ export interface Player {
   // (0 = starter). Defaults to an overall-based rank at generation time,
   // but the user can freely reorder their own team's depth chart.
   depthOrder: number
+  // In-season form: set by applyGamePerformance off recent box scores, so
+  // the roster screen can show an up/down arrow for players heating up or
+  // cooling off. badStreak counts consecutive bad games (resets on a good
+  // one or an actual rating drop) and isn't shown directly.
+  trend?: 'up' | 'down' | null
+  badStreak?: number
 }
 
 export type Conference = 'AFC' | 'NFC'

@@ -12,6 +12,7 @@ import {
   getSeasonHistory,
   makeUserDraftPick,
   moveDepthChart,
+  optimizeDepthChart,
   openFreeAgency,
   previewLeagueTeams,
   proposeTrade,
@@ -239,6 +240,7 @@ function RosterView({
     [leagueId, season],
   )
   const [moving, setMoving] = useState<number | null>(null)
+  const [optimizing, setOptimizing] = useState(false)
 
   if (!team || !roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
@@ -300,17 +302,38 @@ function RosterView({
     }
   }
 
+  const handleOptimize = async () => {
+    setOptimizing(true)
+    try {
+      await optimizeDepthChart(teamId)
+    } finally {
+      setOptimizing(false)
+    }
+  }
+
   return (
     <div>
-      <p className="text-sm text-gray-500 mb-6">
-        {roster.length} players &middot; Team overall {teamOverall} &middot; Cap space {formatMoney(computeCapSpace(roster))}
-        {roster.some((p) => p.injury) && (
-          <> &middot; {roster.filter((p) => p.injury).length} injured</>
-        )}
+      <div className="flex items-center justify-between mb-6 gap-4">
+        <p className="text-sm text-gray-500">
+          {roster.length} players &middot; Team overall {teamOverall} &middot; Cap space {formatMoney(computeCapSpace(roster))}
+          {roster.some((p) => p.injury) && (
+            <> &middot; {roster.filter((p) => p.injury).length} injured</>
+          )}
+          {editable && (
+            <> &middot; Use the arrows to move a player up into the starting group (green) or down to the bench (gray) - starters get the bulk of the playing time, bench players see the field far less. ▲/▼ show recent form.</>
+          )}
+        </p>
         {editable && (
-          <> &middot; Use the arrows to move a player up into the starting group (green) or down to the bench (gray) - starters get the bulk of the playing time, bench players see the field far less</>
+          <button
+            onClick={handleOptimize}
+            disabled={optimizing}
+            className="px-3 py-1.5 border rounded-md text-xs whitespace-nowrap disabled:opacity-50"
+            title="Sets every position's depth chart to best overall first"
+          >
+            {optimizing ? 'Optimizing...' : 'Best Roster'}
+          </button>
         )}
-      </p>
+      </div>
 
       {POSITION_ORDER.map((pos) => {
         const players = byPosition.get(pos)
@@ -394,7 +417,11 @@ function RosterView({
                         )}
                       </td>
                       <td className="py-1 px-2 text-right">{p.age}</td>
-                      <td className="py-1 px-2 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                      <td className="py-1 px-2 text-right text-green-400 font-semibold">
+                        {p.ratings.overall}
+                        {p.trend === 'up' && <span className="ml-1 text-green-400" title="Playing well lately">▲</span>}
+                        {p.trend === 'down' && <span className="ml-1 text-red-400" title="Playing poorly lately">▼</span>}
+                      </td>
                       <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                       <td className="py-1 px-2 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
                       <td className="py-1 px-2 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
@@ -980,6 +1007,23 @@ function FreeAgencyView({
 
   const needs = rosterNeeds(roster)
   const capSpace = computeCapSpace(roster)
+
+  const byPosition = new Map<Position, Player[]>()
+  for (const p of roster) {
+    const list = byPosition.get(p.position) ?? []
+    list.push(p)
+    byPosition.set(p.position, list)
+  }
+  const positionSummary = POSITION_ORDER.map((pos) => {
+    const group = (byPosition.get(pos) ?? []).sort((a, b) => a.depthOrder - b.depthOrder)
+    const top = group[0]
+    return {
+      pos,
+      positionOverall: group.length > 0 ? Math.round(computePositionOverall(group)) : 0,
+      topPlayer: top ? `${top.firstName} ${top.lastName} (${top.ratings.overall})` : 'none',
+      isNeed: needs.includes(pos),
+    }
+  })
   const sorted = sortRows(freeAgents, sort, (p, key) => {
     if (key === 'name') return `${p.firstName} ${p.lastName}`
     if (key === 'pos') return p.position
@@ -1029,6 +1073,27 @@ function FreeAgencyView({
       </div>
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+
+      <div className="mb-6">
+        <h3 className="text-sm font-semibold text-gray-500 mb-2">Your Roster by Position</h3>
+        <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-11 gap-2">
+          {positionSummary.map((s) => (
+            <div
+              key={s.pos}
+              className={`rounded border px-2 py-1.5 text-center ${
+                s.isNeed ? 'border-amber-700 bg-amber-900/20' : 'border-gray-700'
+              }`}
+              title={`Top: ${s.topPlayer}`}
+            >
+              <div className="text-[10px] text-gray-500">{s.pos}</div>
+              <div className="text-sm font-semibold text-green-400">{s.positionOverall || '-'}</div>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-gray-600 mt-1">
+          Position overall reflects your starters, not a flat roster average. Amber = a position you currently need.
+        </p>
+      </div>
 
       <table className="w-full text-sm border-collapse">
         <thead>
