@@ -3,6 +3,7 @@ import type { Conference, GameResult, Player, PlayoffRound, Team } from '../type
 import { runDraft } from './draft'
 import { simGame } from './gameSim'
 import { generateRosterForTeam } from './players'
+import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
 import { generateSchedule } from './schedule'
@@ -258,8 +259,9 @@ export async function advanceToNextSeason(leagueId: number) {
   const allPlayers = await db.players.toArray()
 
   const { retiredIds, agedPlayers } = ageAndRetire(rng, allPlayers)
+  const progressedPlayers = agedPlayers.map((p) => progressPlayer(rng, p))
   if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
-  await db.players.bulkPut(agedPlayers as never[])
+  await db.players.bulkPut(progressedPlayers as never[])
 
   const rostersByTeam = new Map<number, Player[]>()
   for (const team of teams) {

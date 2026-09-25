@@ -64,9 +64,26 @@ async function main() {
 
   console.log('OK: season 1 smoke test passed')
 
+  const ratingsBefore = new Map(
+    (await db.players.toArray()).map((p) => [p.id, p.ratings.overall]),
+  )
+
   const rosterCountBefore = await db.players.count()
   const offseasonResult = await advanceToNextSeason(leagueId)
   const rosterCountAfter = await db.players.count()
+
+  const survivors = await db.players.toArray()
+  const changed = survivors.filter(
+    (p) => ratingsBefore.has(p.id) && ratingsBefore.get(p.id) !== p.ratings.overall,
+  )
+  console.log(
+    'progression: ',
+    changed.length,
+    'of',
+    survivors.filter((p) => ratingsBefore.has(p.id)).length,
+    'returning players changed overall rating',
+  )
+  if (changed.length === 0) throw new Error('No player ratings changed during progression')
   const leagueAfterOffseason = await db.leagues.get(leagueId)
 
   console.log('offseason:', offseasonResult)
