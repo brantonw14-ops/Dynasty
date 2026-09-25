@@ -48,7 +48,7 @@ const TEAM_SEED: TeamSeed[] = [
 export const SALARY_CAP = 224_000_000
 
 export function generateTeams(): Omit<Team, 'id'>[] {
-  return TEAM_SEED.map((t) => ({ ...t, capSpace: SALARY_CAP }))
+  return TEAM_SEED.map((t) => ({ ...t }))
 }
 
 /** Static team metadata in generation order, for pickers that run before a league exists. */

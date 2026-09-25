@@ -64,7 +64,6 @@ export interface Team {
   colors: [string, string]
   conference: Conference
   division: Division
-  capSpace: number
 }
 
 export type PlayoffRound = 'wildcard' | 'divisional' | 'conference' | 'superbowl'

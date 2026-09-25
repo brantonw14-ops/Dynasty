@@ -233,7 +233,7 @@ function RosterView({
   return (
     <div>
       <p className="text-sm text-gray-500 mb-6">
-        {roster.length} players &middot; Team overall {teamOverall} &middot; Cap space {formatMoney(team.capSpace)}
+        {roster.length} players &middot; Team overall {teamOverall} &middot; Cap space {formatMoney(computeCapSpace(roster))}
         {roster.some((p) => p.injury) && (
           <> &middot; {roster.filter((p) => p.injury).length} injured</>
         )}
@@ -247,30 +247,36 @@ function RosterView({
         const attrLabels = POSITION_ATTRIBUTES[pos]
         return (
           <div key={pos} className="mb-6">
-            <h2 className="text-sm font-semibold text-gray-500 mb-2">
-              {pos} <span className="text-gray-600 font-normal">· {positionOverall} OVR</span>
-            </h2>
-            <table className="w-full text-sm border-collapse">
+            <div className="flex items-baseline gap-2 mb-2">
+              <h2 className="text-sm font-semibold text-gray-500">
+                {pos} <span className="text-gray-600 font-normal">· {positionOverall} OVR</span>
+              </h2>
+              <p className="text-xs text-gray-600">
+                {abbrevLabel(attrLabels[0])} = {attrLabels[0]} · {abbrevLabel(attrLabels[1])} = {attrLabels[1]} ·{' '}
+                {abbrevLabel(attrLabels[2])} = {attrLabels[2]}
+              </p>
+            </div>
+            <table className="text-sm border-collapse">
               <thead>
                 <tr className="text-left text-gray-400 border-b">
-                  {editable && <th className="py-1 w-10"></th>}
-                  <th className="py-1">Name</th>
-                  <th className="py-1 text-right">Age</th>
-                  <th className="py-1 text-right">OVR</th>
-                  <th className="py-1 text-right">POT</th>
-                  <th className="py-1 text-right" title={attrLabels[0]}>{abbrevLabel(attrLabels[0])}</th>
-                  <th className="py-1 text-right" title={attrLabels[1]}>{abbrevLabel(attrLabels[1])}</th>
-                  <th className="py-1 text-right" title={attrLabels[2]}>{abbrevLabel(attrLabels[2])}</th>
-                  <th className="py-1 text-right">Salary</th>
-                  <th className="py-1 text-right">Yrs</th>
-                  <th className="py-1 text-right">Season</th>
+                  {editable && <th className="py-1 pr-2 w-10"></th>}
+                  <th className="py-1 pr-6 min-w-[11rem]">Name</th>
+                  <th className="py-1 px-2 text-right w-12">Age</th>
+                  <th className="py-1 px-2 text-right w-12">OVR</th>
+                  <th className="py-1 px-2 text-right w-12">POT</th>
+                  <th className="py-1 px-2 text-right w-12" title={attrLabels[0]}>{abbrevLabel(attrLabels[0])}</th>
+                  <th className="py-1 px-2 text-right w-12" title={attrLabels[1]}>{abbrevLabel(attrLabels[1])}</th>
+                  <th className="py-1 px-2 text-right w-12" title={attrLabels[2]}>{abbrevLabel(attrLabels[2])}</th>
+                  <th className="py-1 pl-4 pr-2 text-right w-20">Salary</th>
+                  <th className="py-1 px-2 text-right w-12">Yrs</th>
+                  <th className="py-1 pl-6 text-left">Season</th>
                 </tr>
               </thead>
               <tbody>
                 {players.map((p, i) => (
                   <tr key={p.id} className="border-b">
                     {editable && (
-                      <td className="py-1">
+                      <td className="py-1 pr-2">
                         <div className="flex gap-1">
                           <button
                             onClick={() => handleMove(p.id, 'up')}
@@ -291,7 +297,7 @@ function RosterView({
                         </div>
                       </td>
                     )}
-                    <td className="py-1">
+                    <td className="py-1 pr-6 whitespace-nowrap">
                       {i === 0 && <span className="text-[10px] text-gray-500 mr-1">1st</span>}
                       {p.firstName} {p.lastName}
                       {p.injury && (
@@ -300,17 +306,17 @@ function RosterView({
                         </span>
                       )}
                     </td>
-                    <td className="py-1 text-right">{p.age}</td>
-                    <td className="py-1 text-right">{p.ratings.overall}</td>
-                    <td className="py-1 text-right">{p.ratings.potential}</td>
-                    <td className="py-1 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
-                    <td className="py-1 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
-                    <td className="py-1 text-right" title={attrLabels[2]}>{p.ratings.attr3}</td>
-                    <td className="py-1 text-right">
+                    <td className="py-1 px-2 text-right">{p.age}</td>
+                    <td className="py-1 px-2 text-right">{p.ratings.overall}</td>
+                    <td className="py-1 px-2 text-right">{p.ratings.potential}</td>
+                    <td className="py-1 px-2 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
+                    <td className="py-1 px-2 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
+                    <td className="py-1 px-2 text-right" title={attrLabels[2]}>{p.ratings.attr3}</td>
+                    <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
                       {p.contract ? formatMoney(p.contract.salary) : '-'}
                     </td>
-                    <td className="py-1 text-right">{p.contract?.yearsLeft ?? '-'}</td>
-                    <td className="py-1 text-right text-gray-500 whitespace-nowrap">
+                    <td className="py-1 px-2 text-right">{p.contract?.yearsLeft ?? '-'}</td>
+                    <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
                       {seasonStatLine(p.position, statTotals.get(p.id))}
                     </td>
                   </tr>
