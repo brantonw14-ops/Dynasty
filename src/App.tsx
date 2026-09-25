@@ -483,7 +483,8 @@ function BoxScoreTable({
   return (
     <div>
       <h4 className="text-xs font-semibold text-gray-400 mb-1">{title}</h4>
-      <table className="w-full text-sm border-collapse data-table">
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
             <th className="py-1 pr-2">Name</th>
@@ -518,6 +519,7 @@ function BoxScoreTable({
           )}
         </tbody>
       </table>
+</div>
     </div>
   )
 }
@@ -628,7 +630,7 @@ function RosterView({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6 gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
         <p className="text-sm text-gray-500">
           {roster.length} players &middot; Team overall {teamOverall} &middot;{' '}
           <InfoTip label="Cap space" tip="How much salary you can still add this season before hitting the league salary cap." />{' '}
@@ -671,7 +673,8 @@ function RosterView({
                 {abbrevLabel(attrLabels[2])} = {attrLabels[2]}
               </p>
             </div>
-            <table className="text-sm border-collapse">
+            <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="text-sm border-collapse data-table">
               <thead>
                 <tr className="text-left text-gray-400 border-b">
                   {editable && <th className="py-1 pr-2 w-10"></th>}
@@ -788,6 +791,7 @@ function RosterView({
                 })}
               </tbody>
             </table>
+</div>
           </div>
         )
       })}
@@ -1243,7 +1247,8 @@ function TradeView({
     setSort: (s: SortState) => void,
     showBlockToggle: boolean,
   ) => (
-    <table className="w-full text-sm border-collapse data-table">
+    <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
       <thead>
         <tr className="text-left text-gray-400 border-b">
           <th className="py-1"></th>
@@ -1299,6 +1304,7 @@ function TradeView({
         ))}
       </tbody>
     </table>
+</div>
   )
 
   const renderPicks = (
@@ -1398,7 +1404,7 @@ function TradeView({
                       </button>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 text-[11px]">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
                     <div className="bg-black/20 rounded px-2 py-1.5">
                       <div className="text-gray-500 mb-0.5">You send</div>
                       <div className="flex items-center justify-between">
@@ -1495,7 +1501,7 @@ function TradeView({
 
       {otherTeamId != null && otherRoster && (
         <>
-          <div className="grid grid-cols-2 gap-6 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-4">
             <div>
               <h3 className="text-sm font-semibold mb-2">You give ({giveIds.size + givePickKeys.size})</h3>
               <p className="text-xs mb-2">
@@ -1629,7 +1635,8 @@ function HistoryView({
   return (
     <div>
       <h2 className="text-lg font-medium mb-2">League History</h2>
-      <table className="w-full text-sm border-collapse data-table">
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
             <th className="py-1">Season</th>
@@ -1662,6 +1669,7 @@ function HistoryView({
           ))}
         </tbody>
       </table>
+</div>
     </div>
   )
 }
@@ -1765,14 +1773,15 @@ function StatsLeadersView({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-6">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
       {categories.map((cat) => (
         <div key={cat.title}>
           <h3 className="text-sm font-semibold mb-2">{cat.title}</h3>
           {cat.rows.length === 0 ? (
             <p className="text-xs text-gray-500">No data yet.</p>
           ) : (
-            <table className="w-full text-sm border-collapse data-table">
+            <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
               <tbody>
                 {cat.rows.map((r, i) => (
                   <tr
@@ -1789,6 +1798,7 @@ function StatsLeadersView({
                 ))}
               </tbody>
             </table>
+</div>
           )}
         </div>
       ))}
@@ -1891,7 +1901,7 @@ function ResignView({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <p className="text-sm text-gray-500">
           Re-sign expiring contracts, extend anyone you want to lock up longer, or cut players you don't
           want - all before free agency opens. Cap space {formatMoney(capSpace)}
@@ -1913,7 +1923,8 @@ function ResignView({
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
 
-      <table className="text-sm border-collapse">
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
             <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-6 min-w-[11rem]" />
@@ -2005,6 +2016,7 @@ function ResignView({
           })}
         </tbody>
       </table>
+</div>
     </div>
   )
 }
@@ -2100,7 +2112,7 @@ function FreeAgencyView({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <p className="text-sm text-gray-500">
           Roster{' '}
           <span className={rosterShort > 0 ? 'text-orange-400 font-semibold' : 'text-emerald-400 font-semibold'}>
@@ -2111,12 +2123,12 @@ function FreeAgencyView({
           <InfoTip label="Needs" tip="Positions below your target roster count at that spot - these are the safest signs to make." />:{' '}
           {needs.length > 0 ? [...new Set(needs)].join(', ') : 'roster full'}
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {rosterShort > 0 && (
             <button
               onClick={handleAutoFill}
               disabled={autoFilling}
-              className="px-3 py-2 bg-orange-600 text-white rounded-md text-sm disabled:opacity-50"
+              className="px-3 py-2 bg-orange-600 text-white rounded-md text-sm disabled:opacity-50 whitespace-nowrap"
             >
               {autoFilling ? 'Signing...' : `Auto-Fill Roster (+${rosterShort})`}
             </button>
@@ -2125,7 +2137,7 @@ function FreeAgencyView({
             <button
               onClick={handleProceed}
               disabled={advancing}
-              className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50"
+              className="px-4 py-2 bg-green-600 text-white rounded-md text-sm disabled:opacity-50 whitespace-nowrap"
             >
               {advancing ? 'Starting draft...' : 'Enter the Draft'}
             </button>
@@ -2151,7 +2163,8 @@ function FreeAgencyView({
         </p>
       )}
 
-      <table className="w-full text-sm border-collapse data-table">
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
             <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} />
@@ -2201,6 +2214,7 @@ function FreeAgencyView({
           )}
         </tbody>
       </table>
+</div>
     </div>
   )
 }
@@ -2369,7 +2383,8 @@ function DraftView({
       )}
 
       {subTab === 'mypicks' ? (
-        <table className="w-full text-sm border-collapse data-table">
+        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
           <thead>
             <tr className="text-left text-gray-400 border-b">
               <th className="py-1 pr-4">Pick</th>
@@ -2410,8 +2425,10 @@ function DraftView({
             )}
           </tbody>
         </table>
+</div>
       ) : (
-        <table className="w-full text-sm border-collapse data-table">
+        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
           <thead>
             <tr className="text-left text-gray-400 border-b">
               <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-4" />
@@ -2469,6 +2486,7 @@ function DraftView({
             )}
           </tbody>
         </table>
+</div>
       )}
     </div>
   )
@@ -2497,7 +2515,7 @@ function StandingsTable({
       {CONFERENCES.map((conf) => (
         <div key={conf} className="mb-8">
           <h2 className="text-lg font-medium mb-2">{conf}</h2>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
             {DIVISIONS.map((div) => {
               const divTeams = teams.filter((t) => t.conference === conf && t.division === div)
               const standings = computeStandings(divTeams, regularGames)
@@ -2506,7 +2524,8 @@ function StandingsTable({
                   <h3 className="text-xs font-semibold text-gray-500 mb-1">
                     {conf} {div}
                   </h3>
-                  <table className="w-full text-sm border-collapse data-table">
+                  <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
                     <tbody>
                       {standings.map((row) => (
                         <tr
@@ -2521,6 +2540,7 @@ function StandingsTable({
                       ))}
                     </tbody>
                   </table>
+</div>
                 </div>
               )
             })}
@@ -2564,11 +2584,12 @@ function PlayoffPictureView({
   return (
     <div>
       <h2 className="text-lg font-medium mb-2">Playoff Picture</h2>
-      <div className="grid grid-cols-2 gap-x-6 gap-y-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 mb-8">
         {CONFERENCES.map((conf) => (
           <div key={conf}>
             <h3 className="text-xs font-semibold text-gray-500 mb-1">{conf} Seeding</h3>
-            <table className="w-full text-sm border-collapse data-table">
+            <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[560px] text-sm border-collapse data-table">
               <tbody>
                 {seedsByConf[conf].map((s) => (
                   <tr key={s.teamId} className={`border-b ${userRowClass(s.teamId, userTeamId)}`}>
@@ -2585,6 +2606,7 @@ function PlayoffPictureView({
                 ))}
               </tbody>
             </table>
+</div>
           </div>
         ))}
       </div>
@@ -2669,10 +2691,10 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
     ROUND_ORDER.find((r) => (playoffGamesByRound.get(r)?.length ?? 0) === 0) ?? null
 
   return (
-    <div className="max-w-7xl mx-auto p-8">
-      <div className="flex items-center justify-between mb-4">
+    <div className="max-w-7xl mx-auto p-4 sm:p-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div>
-          <h1 className="text-2xl font-semibold">{league.name}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold">{league.name}</h1>
           <p className="text-sm text-gray-500">
             Season {league.season} &middot;{' '}
             {league.phase === 'regular'
@@ -2689,12 +2711,12 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             {league.userTeamId != null && <> &middot; Your team: {teamName(league.userTeamId)}</>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {league.phase === 'complete' ? (
             <button
               onClick={handleAdvanceSeason}
               disabled={advancing}
-              className="px-4 py-2 bg-green-600 text-white rounded-md disabled:opacity-50"
+              className="px-4 py-2 bg-green-600 text-white rounded-md disabled:opacity-50 whitespace-nowrap"
             >
               {advancing ? 'Advancing...' : `Start ${league.season + 1} Offseason`}
             </button>
@@ -2702,7 +2724,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             <button
               onClick={handleSimWeek}
               disabled={simming}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50"
+              className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50 whitespace-nowrap"
             >
               {simming ? 'Simming...' : simButtonLabel(league.phase, league.week, nextPlayoffRound)}
             </button>
@@ -2710,7 +2732,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
           <button
             onClick={handleReset}
             disabled={resetting}
-            className="px-4 py-2 border rounded-md text-sm disabled:opacity-50"
+            className="px-4 py-2 border rounded-md text-sm disabled:opacity-50 whitespace-nowrap"
           >
             {resetting ? 'Resetting...' : 'Reset League'}
           </button>
@@ -2901,7 +2923,7 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
   const selected = teamIndex != null ? previews[teamIndex] : null
 
   return (
-    <div className="max-w-3xl mx-auto p-8 text-center">
+    <div className="max-w-3xl mx-auto p-4 sm:p-8 text-center">
       <h1 className="text-2xl font-semibold mb-4">Dynasty</h1>
       <input
         className="border rounded-md px-3 py-2 w-full mb-3"
@@ -2929,7 +2951,7 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
         {CONFERENCES.map((conf) => (
           <div key={conf} className="mb-3 last:mb-0">
             <h3 className="text-xs font-semibold text-gray-500 mb-1 text-left">{conf}</h3>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {previews
                 .filter((t) => t.conference === conf)
                 .map((t) => (
