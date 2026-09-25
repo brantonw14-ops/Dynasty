@@ -25,6 +25,11 @@ export interface Contract {
   yearsLeft: number
 }
 
+export interface Injury {
+  weeksRemaining: number
+  description: string
+}
+
 export interface Player {
   id: number
   firstName: string
@@ -35,6 +40,7 @@ export interface Player {
   ratings: Ratings
   contract: Contract | null
   retired: boolean
+  injury: Injury | null
 }
 
 export type Conference = 'AFC' | 'NFC'

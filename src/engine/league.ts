@@ -3,6 +3,7 @@ import type { Conference, Division, GameResult, Player, PlayoffRound, Team } fro
 import { runDraft } from './draft'
 import { computeCapSpace, expireContracts, runFreeAgency } from './freeAgency'
 import { simGame, type PlayerBoxScore } from './gameSim'
+import { advanceInjuries, rollNewInjuries } from './injuries'
 import { classifyTeamOutlook, generateRosterForTeam, rosterNeeds, type TeamOutlook } from './players'
 import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
@@ -162,9 +163,16 @@ async function simRegularSeasonWeek(leagueId: number) {
     .toArray()
   const rng = createRng(league.season * 1000 + league.week)
 
+  // Collect all injury updates across the whole week's games and write them
+  // in one bulkPut at the end - one bulkPut per game (32/week at full
+  // strength) was the difference between a week taking ~100ms and ~7s.
+  const playerUpdates: Player[] = []
+
   for (const g of weekGames) {
-    const homeRoster = await db.players.where('teamId').equals(g.homeTeamId).toArray()
-    const awayRoster = await db.players.where('teamId').equals(g.awayTeamId).toArray()
+    const homeRosterFull = await db.players.where('teamId').equals(g.homeTeamId).toArray()
+    const awayRosterFull = await db.players.where('teamId').equals(g.awayTeamId).toArray()
+    const homeRoster = homeRosterFull.filter((p) => !p.injury)
+    const awayRoster = awayRosterFull.filter((p) => !p.injury)
     const result = simGame(rng, homeRoster, awayRoster)
     const gameId = await db.games.add({
       leagueId,
@@ -177,6 +185,15 @@ async function simRegularSeasonWeek(leagueId: number) {
     } as never)
     await persistBoxScore(leagueId, league.season, league.week, gameId as number, g.homeTeamId, result.homeBox)
     await persistBoxScore(leagueId, league.season, league.week, gameId as number, g.awayTeamId, result.awayBox)
+
+    playerUpdates.push(
+      ...changedInjuries(homeRosterFull, rollNewInjuries(rng, homeRosterFull)),
+      ...changedInjuries(awayRosterFull, rollNewInjuries(rng, awayRosterFull)),
+    )
+  }
+
+  if (playerUpdates.length > 0) {
+    await db.players.bulkPut(playerUpdates as never[])
   }
 
   const nextWeek = league.week + 1
@@ -216,8 +233,10 @@ async function playGame(
   awayTeamId: number,
   rng: () => number,
 ) {
-  const homeRoster = await db.players.where('teamId').equals(homeTeamId).toArray()
-  const awayRoster = await db.players.where('teamId').equals(awayTeamId).toArray()
+  const homeRosterFull = await db.players.where('teamId').equals(homeTeamId).toArray()
+  const awayRosterFull = await db.players.where('teamId').equals(awayTeamId).toArray()
+  const homeRoster = homeRosterFull.filter((p) => !p.injury)
+  const awayRoster = awayRosterFull.filter((p) => !p.injury)
   const result = simGame(rng, homeRoster, awayRoster)
   const gameId = await db.games.add({
     leagueId,
@@ -231,6 +250,17 @@ async function playGame(
   } as never)
   await persistBoxScore(leagueId, season, week, gameId as number, homeTeamId, result.homeBox)
   await persistBoxScore(leagueId, season, week, gameId as number, awayTeamId, result.awayBox)
+
+  const changed = [
+    ...changedInjuries(homeRosterFull, rollNewInjuries(rng, homeRosterFull)),
+    ...changedInjuries(awayRosterFull, rollNewInjuries(rng, awayRosterFull)),
+  ]
+  if (changed.length > 0) await db.players.bulkPut(changed as never[])
+}
+
+/** Only the players whose injury actually changed - rollNewInjuries returns the same reference for the rest. */
+function changedInjuries(before: Player[], after: Player[]): Player[] {
+  return after.filter((p, i) => p !== before[i])
 }
 
 /** Reseeds a set of remaining playoff teams: best seed vs worst, others paired in order. */
@@ -325,6 +355,17 @@ async function simPlayoffRound(leagueId: number) {
 export async function simWeek(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
+
+  // Heal existing injuries by a week before this week's games roll any new
+  // ones, so a player hurt this week doesn't also get a week knocked off
+  // the same injury before it's even started. Only the (typically small)
+  // set of currently-injured players needs writing back - bulk-putting
+  // every player in the league every week for a handful of real changes
+  // is pure waste.
+  const injuredPlayers = (await db.players.toArray()).filter((p) => p.injury)
+  if (injuredPlayers.length > 0) {
+    await db.players.bulkPut(advanceInjuries(injuredPlayers) as never[])
+  }
 
   if (league.phase === 'regular') {
     await simRegularSeasonWeek(leagueId)

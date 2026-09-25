@@ -107,6 +107,7 @@ export function generatePlayer(
             yearsLeft: randInt(rng, 1, 4),
           },
     retired: false,
+    injury: null,
   }
 }
 

@@ -104,6 +104,9 @@ function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: nu
     <div>
       <p className="text-sm text-gray-500 mb-6">
         {roster.length} players &middot; Cap space {formatMoney(team.capSpace)}
+        {roster.some((p) => p.injury) && (
+          <> &middot; {roster.filter((p) => p.injury).length} injured</>
+        )}
       </p>
 
       {POSITION_ORDER.map((pos) => {
@@ -129,6 +132,11 @@ function RosterView({ teamId, leagueId, season }: { teamId: number; leagueId: nu
                   <tr key={p.id} className="border-b">
                     <td className="py-1">
                       {p.firstName} {p.lastName}
+                      {p.injury && (
+                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-900 text-red-200">
+                          {p.injury.description} · {p.injury.weeksRemaining}wk
+                        </span>
+                      )}
                     </td>
                     <td className="py-1 text-right">{p.age}</td>
                     <td className="py-1 text-right">{p.ratings.overall}</td>

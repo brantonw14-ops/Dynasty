@@ -236,6 +236,19 @@ async function main() {
   }
   console.log('OK: season history matches champion after season 1')
 
+  await (async () => {
+    const allPlayers = await db.players.toArray()
+    const injured = allPlayers.filter((p) => p.injury)
+    console.log('injured players after season 1:', injured.length, 'of', allPlayers.length)
+    if (injured.length === 0) throw new Error('Expected at least some injuries after a full season')
+    for (const p of injured) {
+      if (p.injury!.weeksRemaining < 1) {
+        throw new Error(`Player ${p.id} has an injury with weeksRemaining < 1`)
+      }
+    }
+    console.log('OK: injuries occurred over the season')
+  })()
+
   console.log('OK: season 1 smoke test passed')
 
   const ratingsBefore = new Map(
