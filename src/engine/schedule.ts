@@ -121,53 +121,122 @@ export function buildSeasonMatchups(teams: Team[], season: number): Matchup[] {
     }
   }
 
-  // 1 remaining cross-conference game, matched by slot.
-  for (const team of teams) {
-    const otherConference: Conference = team.conference === 'AFC' ? 'NFC' : 'AFC'
-    const crossDivision =
-      team.conference === 'AFC' ? crossPartner(team.division) : undefined
-    const pairedOtherDivision =
-      team.conference === 'AFC'
-        ? crossDivision!
-        : ALL_DIVISIONS.find((d) => crossPartner(d) === team.division)!
-    const remainingCross = ALL_DIVISIONS.filter((d) => d !== pairedOtherDivision)
-    const slot = slotOf(team)
-    const pick = remainingCross[(season + slot) % remainingCross.length]
-    const opp = divisionTeams(otherConference, pick)[slot]
-    if (opp) addSingleGame(team, opp)
+  // 1 remaining cross-conference game per team, as an actual perfect matching
+  // (every AFC team gets exactly one extra NFC opponent and vice versa) -
+  // per-team slot lookups here would let some teams end up as someone else's
+  // pick without a reciprocal pick of their own, unbalancing game counts.
+  const afcTeams = [...divisionTeamsFlat(byDivision, 'AFC')]
+  const nfcTeams = [...divisionTeamsFlat(byDivision, 'NFC')]
+  shuffleInPlace(afcTeams, season, 1)
+  const usedNfcIds = new Set<number>()
+  for (const afc of afcTeams) {
+    const candidates = nfcTeams.filter(
+      (nfc) => !usedNfcIds.has(nfc.id) && !seen.has(pairKey(afc.id, nfc.id)),
+    )
+    shuffleInPlace(candidates, season, afc.id)
+    const opp = candidates[0]
+    if (!opp) continue // extremely unlikely given how sparse `seen` is here
+    usedNfcIds.add(opp.id)
+    addSingleGame(afc, opp)
   }
 
   return matchups
 }
 
-/** Greedily packs games into weeks so no team plays twice in the same week. */
-function assignWeeks(matchups: Matchup[], rng: () => number): ScheduledGame[] {
-  const remaining = [...matchups]
-  // Shuffle for variety in home/away and week grouping.
-  for (let i = remaining.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1))
-    ;[remaining[i], remaining[j]] = [remaining[j], remaining[i]]
-  }
+function divisionTeamsFlat(byDivision: Map<string, Team[]>, conference: Conference): Team[] {
+  return ALL_DIVISIONS.flatMap((d) => byDivision.get(`${conference}-${d}`) ?? [])
+}
 
-  const games: ScheduledGame[] = []
-  let week = 1
-  while (remaining.length > 0) {
+/** Deterministic shuffle so the same season always produces the same schedule. */
+function shuffleInPlace<T>(arr: T[], seed: number, salt: number) {
+  let state = (seed * 2654435761 + salt * 40503) >>> 0
+  const next = () => {
+    state ^= state << 13
+    state ^= state >>> 17
+    state ^= state << 5
+    state >>>= 0
+    return state / 4294967296
+  }
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1))
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+  }
+}
+
+/**
+ * Picks a maximal matching (no team plays twice) from the remaining games for
+ * one week. Purely random ordering tends to strand a growing pile of games
+ * for teams that happen to get skipped early, which snowballs into a long,
+ * thin tail of near-empty weeks. Prioritizing matchups whose teams have the
+ * fewest games left elsewhere (most constrained first, a standard graph
+ * coloring heuristic) keeps the weekly matchings close to maximum instead.
+ */
+function bestWeekMatching(
+  remaining: Matchup[],
+  remainingDegree: Map<number, number>,
+  teamCount: number,
+  rng: () => number,
+): number[] {
+  const attempts = 150
+  const maxPossible = Math.floor(teamCount / 2)
+  let best: number[] = []
+
+  for (let attempt = 0; attempt < attempts && best.length < maxPossible; attempt++) {
+    const scored = remaining.map((m, i) => ({
+      i,
+      // Small random jitter keeps attempts diverse while still favoring scarce teams.
+      key:
+        Math.min(remainingDegree.get(m.a)!, remainingDegree.get(m.b)!) * 10 + rng(),
+    }))
+    scored.sort((x, y) => x.key - y.key)
+
     const busy = new Set<number>()
-    for (let i = 0; i < remaining.length; ) {
+    const chosen: number[] = []
+    for (const { i } of scored) {
       const m = remaining[i]
       if (!busy.has(m.a) && !busy.has(m.b)) {
         busy.add(m.a)
         busy.add(m.b)
-        const homeFirst = rng() < 0.5
-        games.push({
-          week,
-          homeTeamId: homeFirst ? m.a : m.b,
-          awayTeamId: homeFirst ? m.b : m.a,
-        })
-        remaining.splice(i, 1)
-      } else {
-        i++
+        chosen.push(i)
       }
+    }
+
+    if (chosen.length > best.length) best = chosen
+  }
+
+  return best
+}
+
+/** Packs games into weeks so every team plays at most once per week. */
+function assignWeeks(matchups: Matchup[], teamCount: number, rng: () => number): ScheduledGame[] {
+  const remaining = [...matchups]
+  const remainingDegree = new Map<number, number>()
+  for (const m of remaining) {
+    remainingDegree.set(m.a, (remainingDegree.get(m.a) ?? 0) + 1)
+    remainingDegree.set(m.b, (remainingDegree.get(m.b) ?? 0) + 1)
+  }
+
+  const games: ScheduledGame[] = []
+  let week = 1
+
+  while (remaining.length > 0) {
+    const chosenIdx = bestWeekMatching(remaining, remainingDegree, teamCount, rng)
+    const chosenSet = new Set(chosenIdx)
+
+    for (const idx of chosenIdx) {
+      const m = remaining[idx]
+      const homeFirst = rng() < 0.5
+      games.push({
+        week,
+        homeTeamId: homeFirst ? m.a : m.b,
+        awayTeamId: homeFirst ? m.b : m.a,
+      })
+      remainingDegree.set(m.a, remainingDegree.get(m.a)! - 1)
+      remainingDegree.set(m.b, remainingDegree.get(m.b)! - 1)
+    }
+
+    for (let i = remaining.length - 1; i >= 0; i--) {
+      if (chosenSet.has(i)) remaining.splice(i, 1)
     }
     week++
   }
@@ -181,5 +250,5 @@ export function generateSchedule(
   rng: () => number,
 ): ScheduledGame[] {
   const matchups = buildSeasonMatchups(teams, season)
-  return assignWeeks(matchups, rng)
+  return assignWeeks(matchups, teams.length, rng)
 }
