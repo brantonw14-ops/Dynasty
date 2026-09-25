@@ -1,18 +1,21 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
 import { db } from './db'
-import {
-  advanceToNextSeason,
-  createLeague,
-  deleteLeague,
-  regularSeasonWeeks,
-  simWeek,
-} from './engine/league'
+import { advanceToNextSeason, createLeague, deleteLeague, simWeek } from './engine/league'
 import { computeStandings } from './engine/standings'
 import { TEAM_PREVIEWS } from './engine/teams'
-import type { LeaguePhase, Player, Position } from './types'
+import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
 
 const POSITION_ORDER: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
+const CONFERENCES: Conference[] = ['AFC', 'NFC']
+const DIVISIONS: Division[] = ['East', 'North', 'South', 'West']
+const ROUND_LABELS: Record<PlayoffRound, string> = {
+  wildcard: 'Wild Card',
+  divisional: 'Divisional',
+  conference: 'Conference Championship',
+  superbowl: 'Super Bowl',
+}
+const ROUND_ORDER: PlayoffRound[] = ['wildcard', 'divisional', 'conference', 'superbowl']
 
 function formatMoney(n: number) {
   return `$${(n / 1_000_000).toFixed(1)}M`
@@ -20,10 +23,7 @@ function formatMoney(n: number) {
 
 function RosterView({ teamId }: { teamId: number }) {
   const team = useLiveQuery(() => db.teams.get(teamId), [teamId])
-  const roster = useLiveQuery(
-    () => db.players.where('teamId').equals(teamId).toArray(),
-    [teamId],
-  )
+  const roster = useLiveQuery(() => db.players.where('teamId').equals(teamId).toArray(), [teamId])
 
   if (!team || !roster) return <p className="text-sm text-gray-500">Loading roster...</p>
 
@@ -84,9 +84,54 @@ function RosterView({ teamId }: { teamId: number }) {
   )
 }
 
-function simButtonLabel(phase: LeaguePhase, week: number, hasSemis: boolean) {
+function StandingsTable({
+  teams,
+  regularGames,
+  teamName,
+}: {
+  teams: Team[]
+  regularGames: GameResult[]
+  teamName: (id: number) => string
+}) {
+  return (
+    <>
+      {CONFERENCES.map((conf) => (
+        <div key={conf} className="mb-8">
+          <h2 className="text-lg font-medium mb-2">{conf}</h2>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+            {DIVISIONS.map((div) => {
+              const divTeams = teams.filter((t) => t.conference === conf && t.division === div)
+              const standings = computeStandings(divTeams, regularGames)
+              return (
+                <div key={div}>
+                  <h3 className="text-xs font-semibold text-gray-500 mb-1">
+                    {conf} {div}
+                  </h3>
+                  <table className="w-full text-sm border-collapse">
+                    <tbody>
+                      {standings.map((row) => (
+                        <tr key={row.teamId} className="border-b">
+                          <td className="py-1">{teamName(row.teamId)}</td>
+                          <td className="py-1 text-right w-10">{row.wins}</td>
+                          <td className="py-1 text-right w-10">{row.losses}</td>
+                          <td className="py-1 text-right w-10">{row.ties}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+    </>
+  )
+}
+
+function simButtonLabel(phase: LeaguePhase, week: number, currentRound: PlayoffRound | null) {
   if (phase === 'complete') return 'Season Complete'
-  if (phase === 'playoffs') return hasSemis ? 'Sim Championship' : 'Sim Playoffs'
+  if (phase === 'playoffs') return currentRound ? `Sim ${ROUND_LABELS[currentRound]}` : 'Sim Playoffs'
   return `Sim Week ${week}`
 }
 
@@ -139,20 +184,22 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
 
   const seasonGames = games.filter((g) => g.season === league.season)
   const regularGames = seasonGames.filter((g) => g.round === undefined)
-  const semiGames = seasonGames.filter((g) => g.round === 'semifinal')
-  const finalGame = seasonGames.find((g) => g.round === 'final')
-  const standings = computeStandings(teams, regularGames)
-  const totalWeeks = regularSeasonWeeks(teams.length)
+  const playoffGamesByRound = new Map<PlayoffRound, GameResult[]>()
+  for (const round of ROUND_ORDER) {
+    playoffGamesByRound.set(round, seasonGames.filter((g) => g.round === round))
+  }
+  const nextPlayoffRound =
+    ROUND_ORDER.find((r) => (playoffGamesByRound.get(r)?.length ?? 0) === 0) ?? null
 
   return (
-    <div className="max-w-3xl mx-auto p-8">
+    <div className="max-w-4xl mx-auto p-8">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-semibold">{league.name}</h1>
           <p className="text-sm text-gray-500">
             Season {league.season} &middot;{' '}
             {league.phase === 'regular'
-              ? `Week ${league.week} of ${totalWeeks}`
+              ? `Week ${league.week} of ${league.regularSeasonWeeks}`
               : league.phase === 'playoffs'
                 ? 'Playoffs'
                 : 'Complete'}
@@ -174,9 +221,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
               disabled={simming}
               className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50"
             >
-              {simming
-                ? 'Simming...'
-                : simButtonLabel(league.phase, league.week, semiGames.length > 0)}
+              {simming ? 'Simming...' : simButtonLabel(league.phase, league.week, nextPlayoffRound)}
             </button>
           )}
           <button
@@ -191,7 +236,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
 
       {league.phase === 'complete' && league.champTeamId != null && (
         <div className="mb-6 border rounded-md px-4 py-3 bg-yellow-50 text-sm font-medium">
-          🏆 {teamName(league.champTeamId)} won the championship!
+          🏆 {teamName(league.champTeamId)} won the Super Bowl!
         </div>
       )}
 
@@ -221,54 +266,31 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
       {tab === 'league' && (
         <>
           <h2 className="text-lg font-medium mb-2">Standings</h2>
-          <table className="w-full text-sm mb-8 border-collapse">
-            <thead>
-              <tr className="text-left text-gray-500 border-b">
-                <th className="py-1">Team</th>
-                <th className="py-1 text-right">W</th>
-                <th className="py-1 text-right">L</th>
-                <th className="py-1 text-right">T</th>
-                <th className="py-1 text-right">PF</th>
-                <th className="py-1 text-right">PA</th>
-              </tr>
-            </thead>
-            <tbody>
-              {standings.map((row, i) => (
-                <tr key={row.teamId} className="border-b">
-                  <td className="py-1">
-                    {i < 4 && league.phase !== 'regular' && (
-                      <span className="text-xs text-gray-400 mr-1">#{i + 1}</span>
-                    )}
-                    {teamName(row.teamId)}
-                  </td>
-                  <td className="py-1 text-right">{row.wins}</td>
-                  <td className="py-1 text-right">{row.losses}</td>
-                  <td className="py-1 text-right">{row.ties}</td>
-                  <td className="py-1 text-right">{row.pointsFor}</td>
-                  <td className="py-1 text-right">{row.pointsAgainst}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <StandingsTable teams={teams} regularGames={regularGames} teamName={teamName} />
 
-          {(semiGames.length > 0 || finalGame) && (
-            <>
+          {ROUND_ORDER.some((r) => (playoffGamesByRound.get(r)?.length ?? 0) > 0) && (
+            <div className="mb-8">
               <h2 className="text-lg font-medium mb-2">Playoffs</h2>
-              <ul className="space-y-1 mb-8">
-                {semiGames.map((g) => (
-                  <li key={g.id} className="text-sm border-b py-1">
-                    Semifinal: {teamName(g.awayTeamId)} {g.awayScore} @{' '}
-                    {teamName(g.homeTeamId)} {g.homeScore}
-                  </li>
-                ))}
-                {finalGame && (
-                  <li className="text-sm border-b py-1 font-medium">
-                    Championship: {teamName(finalGame.awayTeamId)} {finalGame.awayScore} @{' '}
-                    {teamName(finalGame.homeTeamId)} {finalGame.homeScore}
-                  </li>
-                )}
-              </ul>
-            </>
+              {ROUND_ORDER.map((round) => {
+                const roundGames = playoffGamesByRound.get(round) ?? []
+                if (roundGames.length === 0) return null
+                return (
+                  <div key={round} className="mb-3">
+                    <h3 className="text-xs font-semibold text-gray-500 mb-1">
+                      {ROUND_LABELS[round]}
+                    </h3>
+                    <ul className="space-y-1">
+                      {roundGames.map((g) => (
+                        <li key={g.id} className="text-sm border-b py-1">
+                          {teamName(g.awayTeamId)} {g.awayScore} @ {teamName(g.homeTeamId)}{' '}
+                          {g.homeScore}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              })}
+            </div>
           )}
 
           <h2 className="text-lg font-medium mb-2">Results</h2>
@@ -305,7 +327,7 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
   }
 
   return (
-    <div className="max-w-md mx-auto p-8 text-center">
+    <div className="max-w-2xl mx-auto p-8 text-center">
       <h1 className="text-2xl font-semibold mb-4">Dynasty</h1>
       <input
         className="border rounded-md px-3 py-2 w-full mb-3"
@@ -315,17 +337,29 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
       />
 
       <p className="text-sm text-gray-500 mb-2 text-left">Pick your team</p>
-      <div className="grid grid-cols-2 gap-2 mb-4">
-        {TEAM_PREVIEWS.map((t, i) => (
-          <button
-            key={t.abbrev}
-            onClick={() => setTeamIndex(i)}
-            className={`border rounded-md px-3 py-2 text-sm text-left ${
-              teamIndex === i ? 'border-blue-600 ring-1 ring-blue-600' : ''
-            }`}
-          >
-            {t.region} {t.name}
-          </button>
+      <div className="max-h-80 overflow-y-auto border rounded-md p-3 mb-4">
+        {CONFERENCES.map((conf) => (
+          <div key={conf} className="mb-3 last:mb-0">
+            <h3 className="text-xs font-semibold text-gray-500 mb-1 text-left">{conf}</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {TEAM_PREVIEWS.map((t, i) =>
+                t.conference === conf ? (
+                  <button
+                    key={t.abbrev}
+                    onClick={() => setTeamIndex(i)}
+                    className={`border rounded-md px-3 py-2 text-sm text-left ${
+                      teamIndex === i ? 'border-blue-600 ring-1 ring-blue-600' : ''
+                    }`}
+                  >
+                    {t.region} {t.name}
+                    <span className="block text-xs text-gray-500">
+                      {t.conference} {t.division}
+                    </span>
+                  </button>
+                ) : null,
+              )}
+            </div>
+          </div>
         ))}
       </div>
 

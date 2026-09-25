@@ -37,16 +37,21 @@ export interface Player {
   retired: boolean
 }
 
+export type Conference = 'AFC' | 'NFC'
+export type Division = 'East' | 'North' | 'South' | 'West'
+
 export interface Team {
   id: number
   region: string
   name: string
   abbrev: string
   colors: [string, string]
+  conference: Conference
+  division: Division
   capSpace: number
 }
 
-export type PlayoffRound = 'semifinal' | 'final'
+export type PlayoffRound = 'wildcard' | 'divisional' | 'conference' | 'superbowl'
 
 export interface GameResult {
   id: number
@@ -76,6 +81,7 @@ export interface League {
   name: string
   season: number
   week: number
+  regularSeasonWeeks: number
   phase: LeaguePhase
   champTeamId: number | null
   userTeamId: number | null
