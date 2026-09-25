@@ -5,7 +5,14 @@ import { computeCapSpace, expireContractsWithAiRetention, runFreeAgency } from '
 import { simGame, type PlayerBoxScore } from './gameSim'
 import { applyGamePerformance } from './inSeasonProgression'
 import { advanceInjuries, rollNewInjuries } from './injuries'
-import { classifyTeamOutlook, generateRosterForTeam, nextDepthOrder, rosterNeeds, type TeamOutlook } from './players'
+import {
+  classifyTeamOutlook,
+  generateRosterForTeam,
+  generateStreetFreeAgents,
+  nextDepthOrder,
+  rosterNeeds,
+  type TeamOutlook,
+} from './players'
 import { progressPlayer } from './progression'
 import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
@@ -88,6 +95,12 @@ export async function createLeague(name: string, userTeamIndex: number, seed = D
     const roster = generateRosterForTeam(rng, team.id)
     await db.players.bulkAdd(roster as never[])
   }
+
+  // Seed a real day-one free agent pool - a fresh league shouldn't start
+  // with nobody to sign, same as the real NFL always has replacement-level
+  // guys unsigned even before any cuts or retirements happen.
+  const streetFreeAgents = generateStreetFreeAgents(rng, 70)
+  await db.players.bulkAdd(streetFreeAgents as never[])
 
   const userTeamId = teams[userTeamIndex]?.id ?? teams[0].id
   const regularSeasonWeeks = await generateAndStoreSchedule(leagueId as number, teams, season, rng)
@@ -224,6 +237,15 @@ async function simRegularSeasonWeek(leagueId: number) {
 
   if (playerUpdateMap.size > 0) {
     await db.players.bulkPut([...playerUpdateMap.values()] as never[])
+  }
+
+  // Free agency has real churn week to week even in-season - a couple of
+  // new names hit the market most weeks (camp/roster cuts elsewhere,
+  // players between teams), so the pool doesn't just shrink toward empty
+  // as the user (or AI) signs people off it.
+  const newFreeAgentCount = Math.floor(rng() * 3) // 0-2 per week
+  if (newFreeAgentCount > 0) {
+    await db.players.bulkAdd(generateStreetFreeAgents(rng, newFreeAgentCount) as never[])
   }
 
   const nextWeek = league.week + 1

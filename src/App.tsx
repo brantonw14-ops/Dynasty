@@ -715,6 +715,29 @@ function GameReportView({
   const reasons = won || tied ? [] : buildGameReasons(myStatLines, won, myScore, oppScore)
   const winReasons = won ? buildGameReasons(myStatLines, won, myScore, oppScore) : []
 
+  // Season-wide trend, not just this one game - a single bad game is noise,
+  // but a position that keeps grading out poorly across multiple games is
+  // an actual roster weakness worth addressing via free agency or a trade.
+  const myTrendStats = seasonStats.filter((s) => s.teamId === userTeamId)
+  const positionTrend = new Map<Position, { good: number; bad: number }>()
+  for (const s of myTrendStats) {
+    const tag = classifyGamePerformance(s.position, s)
+    if (!tag) continue
+    const entry = positionTrend.get(s.position) ?? { good: 0, bad: 0 }
+    if (tag === 'good') entry.good++
+    else entry.bad++
+    positionTrend.set(s.position, entry)
+  }
+  const capSpace = computeCapSpace(roster)
+  const weakPositions = POSITION_ORDER.map((pos) => {
+    const trend = positionTrend.get(pos) ?? { good: 0, bad: 0 }
+    const positionPlayers = roster.filter((p) => p.position === pos)
+    const overall = positionPlayers.length > 0 ? Math.round(computePositionOverall(positionPlayers)) : 0
+    return { pos, ...trend, net: trend.good - trend.bad, overall }
+  })
+    .filter((p) => p.bad > 0 && p.net < 0)
+    .sort((a, b) => a.net - b.net)
+
   const turnoversCommitted = myStatLines
     .filter((s) => s.interceptions > 0)
     .map((s) => ({ player: rosterById.get(s.playerId), count: s.interceptions }))
@@ -839,6 +862,30 @@ function GameReportView({
             ))}
           </ul>
         </div>
+      </div>
+
+      <div className="mt-6 border rounded p-3">
+        <h3 className="text-sm font-semibold text-gray-500 mb-2">Season Trends - Where to Upgrade</h3>
+        <p className="text-xs text-gray-600 mb-2">
+          Positions with more bad games than good ones across the {sortedGames.length} game(s) played so far this season - a
+          single rough game is noise, a repeated one is a real weakness. Cap space: {formatMoney(capSpace)}.
+        </p>
+        {weakPositions.length === 0 && (
+          <p className="text-xs text-gray-600">No position has a losing performance trend yet.</p>
+        )}
+        <ul className="text-sm space-y-1.5">
+          {weakPositions.map((w) => (
+            <li key={w.pos} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
+              <span>
+                <span className="font-semibold">{w.pos}</span>{' '}
+                <span className="text-gray-500 text-xs">({w.overall} OVR)</span>
+              </span>
+              <span className="text-xs whitespace-nowrap text-red-400">
+                {w.bad} bad vs {w.good} good game(s) - consider {capSpace > 0 ? 'free agency or a trade' : 'a trade'} to upgrade
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   )

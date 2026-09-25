@@ -235,6 +235,36 @@ export function generateRosterForTeam(rng: Rng, teamId: number): Omit<Player, 'i
   return players
 }
 
+/**
+ * Real NFL free agency is never actually empty - there's always a pool of
+ * unsigned players around the league: camp cuts, guys between teams,
+ * replacement-level depth nobody's bothered to sign. Mostly replacement
+ * level (a below-average skew), with an occasional useful veteran mixed
+ * in, spread across positions in roughly the same shape a roster carries.
+ */
+export function generateStreetFreeAgents(rng: Rng, count: number): Omit<Player, 'id'>[] {
+  const weights = POSITIONS.map((p) => ROSTER_SHAPE[p])
+  const totalWeight = weights.reduce((a, b) => a + b, 0)
+  const players: Omit<Player, 'id'>[] = []
+  for (let i = 0; i < count; i++) {
+    let r = rng() * totalWeight
+    let position = POSITIONS[POSITIONS.length - 1]
+    for (let j = 0; j < POSITIONS.length; j++) {
+      r -= weights[j]
+      if (r <= 0) {
+        position = POSITIONS[j]
+        break
+      }
+    }
+    // Skewed toward replacement level (skill < 0 most of the time), with a
+    // long enough tail that an occasional above-average name shows up too.
+    const skill = -0.5 + randNormal(rng, 0, 0.6)
+    const strength: TeamStrength = { skill, ratingOffset: skill * 6, ageOffset: skill * 1.5, spendFactor: 1 }
+    players.push(generatePlayer(rng, position, null, strength))
+  }
+  return players
+}
+
 /** Depth-chart rank to give a newly-acquired player: goes to the bottom of their new team's group. */
 export function nextDepthOrder(existingRoster: { position: Position; depthOrder: number }[], position: Position) {
   const atPosition = existingRoster.filter((p) => p.position === position)

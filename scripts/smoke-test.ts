@@ -272,6 +272,13 @@ async function main() {
   console.log('teams:', teamCount, '(expected 32)')
   if (teamCount !== 32) throw new Error('Expected 32 NFL teams')
 
+  // A fresh league should never start with an empty free agent pool - real
+  // free agency always has replacement-level names on the board.
+  const dayOneFreeAgents = (await db.players.toArray()).filter((p) => p.teamId === null)
+  console.log(`day-one free agents: ${dayOneFreeAgents.length}`)
+  if (dayOneFreeAgents.length === 0) throw new Error('Expected a seeded free agent pool at league creation')
+  console.log('OK: league starts with a real free agent pool to sign from')
+
   await (async () => {
     const previews = previewLeagueTeams(seed)
     const teams = await db.teams.toArray()
@@ -879,6 +886,11 @@ async function main() {
   console.log('OK: cut a player mid-season and they became a free agent')
 
   const midSeasonFAs = (await db.players.toArray()).filter((p) => p.teamId === null)
+  console.log(`free agents available mid-season: ${midSeasonFAs.length}`)
+  if (midSeasonFAs.length < 5) {
+    throw new Error(`Expected a real mid-season free agent pool (weekly trickle + seeded pool), only found ${midSeasonFAs.length}`)
+  }
+  console.log('OK: free agent pool has real supply mid-season, not just the player just cut')
   const midSeasonNeeds = new Set(rosterNeeds(await db.players.where('teamId').equals(leagueAfterOffseason.userTeamId).toArray()))
   const midSeasonCapSpace = computeCapSpace(await db.players.where('teamId').equals(leagueAfterOffseason.userTeamId).toArray())
   const midSeasonTarget = midSeasonFAs
