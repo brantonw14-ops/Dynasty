@@ -715,6 +715,15 @@ function GameReportView({
   const reasons = won || tied ? [] : buildGameReasons(myStatLines, won, myScore, oppScore)
   const winReasons = won ? buildGameReasons(myStatLines, won, myScore, oppScore) : []
 
+  const turnoversCommitted = myStatLines
+    .filter((s) => s.interceptions > 0)
+    .map((s) => ({ player: rosterById.get(s.playerId), count: s.interceptions }))
+    .filter((x): x is { player: Player; count: number } => x.player != null)
+  const turnoversForced = myStatLines
+    .filter((s) => s.defInterceptions > 0)
+    .map((s) => ({ player: rosterById.get(s.playerId), count: s.defInterceptions }))
+    .filter((x): x is { player: Player; count: number } => x.player != null)
+
   const roundLabel = selectedGame.round
     ? selectedGame.round[0].toUpperCase() + selectedGame.round.slice(1)
     : `Week ${selectedGame.week}`
@@ -761,6 +770,43 @@ function GameReportView({
           {tied && <li>Game ended tied - review the individual performances below for what to fix.</li>}
         </ul>
       </div>
+
+      {(turnoversCommitted.length > 0 || turnoversForced.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <h3 className="text-sm font-semibold text-red-400 mb-2">Turned It Over</h3>
+            {turnoversCommitted.length === 0 && <p className="text-xs text-gray-600">No turnovers given up.</p>}
+            <ul className="text-sm space-y-1.5">
+              {turnoversCommitted.map(({ player, count }) => (
+                <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
+                  <span>
+                    {player.firstName} {player.lastName}{' '}
+                    <span className="text-gray-500 text-xs">({player.position})</span>
+                  </span>
+                  <span className="text-xs whitespace-nowrap text-red-400">
+                    {count} INT thrown
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-green-400 mb-2">Takeaways</h3>
+            {turnoversForced.length === 0 && <p className="text-xs text-gray-600">No takeaways forced.</p>}
+            <ul className="text-sm space-y-1.5">
+              {turnoversForced.map(({ player, count }) => (
+                <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
+                  <span>
+                    {player.firstName} {player.lastName}{' '}
+                    <span className="text-gray-500 text-xs">({player.position})</span>
+                  </span>
+                  <span className="text-xs whitespace-nowrap text-green-400">{count} INT made</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
