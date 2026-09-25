@@ -11,6 +11,7 @@ import {
   previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
+  resignPlayer,
   signFreeAgent,
   simWeek,
 } from '../src/engine/league'
@@ -18,8 +19,10 @@ import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
 import { computePositionOverall, computeTeamOverall, MIN_OVERALL, rosterNeeds } from '../src/engine/players'
 import { marketSalary } from '../src/engine/salary'
+import { gradeSeasonPerformance } from '../src/engine/seasonPerformance'
 import { computeStandings } from '../src/engine/standings'
 import { playerValue } from '../src/engine/trades'
+import type { Position } from '../src/types'
 
 const MAX_WEEKS = 40
 
@@ -417,6 +420,31 @@ async function main() {
   })()
 
   await (async () => {
+    // Season grades should cover every position (not just offensive skill
+    // positions - the resign screen needs a grade for OL/DL/CB/K/etc too)
+    // and actually spread across more than one letter, not collapse
+    // everyone into the same grade.
+    const stats = await db.playerGameStats.where('leagueId').equals(leagueId).toArray()
+    const grades = gradeSeasonPerformance(stats)
+    if (grades.size === 0) throw new Error('Expected some players to receive a season grade')
+
+    const players = await db.players.toArray()
+    const playerById = new Map(players.map((p) => [p.id, p]))
+    const gradedPositions = new Set(
+      [...grades.keys()].map((id) => playerById.get(id)?.position).filter((p): p is Position => p != null),
+    )
+    console.log(`season grades: ${grades.size} players graded across positions [${[...gradedPositions].sort().join(', ')}]`)
+    if (gradedPositions.size < 5) {
+      throw new Error(`Expected grades across most positions, only got: ${[...gradedPositions].join(', ')}`)
+    }
+    const distinctGrades = new Set(grades.values())
+    if (distinctGrades.size < 3) {
+      throw new Error(`Expected grades to spread across several letters, only saw: ${[...distinctGrades].join(', ')}`)
+    }
+    console.log('OK: season grades cover most positions and spread across multiple letters')
+  })()
+
+  await (async () => {
     // Injuries should cost the player some potential, scaled to severity.
     const injured = (await db.players.toArray()).filter((p) => p.injury)
     console.log(`checked injury potential loss on ${injured.length} injured players`)
@@ -536,7 +564,53 @@ async function main() {
   }
   console.log('OK: cut a player during the resign window')
 
+  // Resigning an expired-contract player should keep them on the team with
+  // a fresh contract instead of letting them slip into free agency.
+  const rosterAfterCut = await db.players.where('teamId').equals(leagueInResign.userTeamId).toArray()
+  const expiring = rosterAfterCut.filter((p) => p.contract === null)
+  console.log(`players on user team needing a contract decision: ${expiring.length}`)
+  if (expiring.length > 0) {
+    const toResign = expiring[0]
+    await resignPlayer(leagueId, toResign.id, 3)
+    const afterResign = await db.players.get(toResign.id)
+    if (afterResign?.teamId !== leagueInResign.userTeamId) {
+      throw new Error('resignPlayer did not keep the player on the team')
+    }
+    if (!afterResign.contract || afterResign.contract.yearsLeft !== 3 || afterResign.contract.salary <= 0) {
+      throw new Error('resignPlayer did not assign a sane new contract')
+    }
+    console.log('OK: resigned an expiring player to a new 3-year contract')
+  } else {
+    console.log('OK: no expiring contracts to resign this cycle (nothing to test)')
+  }
+
+  // Extending an already-signed player should replace their existing deal.
+  const stillSigned = rosterAfterCut.find((p) => p.contract !== null)
+  if (stillSigned) {
+    const oldContract = stillSigned.contract!
+    await resignPlayer(leagueId, stillSigned.id, 4)
+    const afterExtend = await db.players.get(stillSigned.id)
+    if (!afterExtend?.contract || afterExtend.contract.yearsLeft !== 4) {
+      throw new Error('resignPlayer did not extend the already-signed player to 4 years')
+    }
+    console.log(`OK: extended an already-signed player (was ${oldContract.yearsLeft}yr, now 4yr)`)
+  }
+
+  // Anyone left with no contract when free agency opens should be released,
+  // same as every other team's uncontested expirations.
+  const undecidedBeforeOpen = (await db.players.where('teamId').equals(leagueInResign.userTeamId).toArray()).filter(
+    (p) => p.contract === null,
+  )
+
   await openFreeAgency(leagueId)
+
+  for (const p of undecidedBeforeOpen) {
+    const after = await db.players.get(p.id)
+    if (after?.teamId !== null) {
+      throw new Error(`Player ${p.id} was left on the roster with no contract after free agency opened`)
+    }
+  }
+  console.log(`OK: ${undecidedBeforeOpen.length} un-resigned player(s) released to free agency on open`)
   const leagueInFA = await db.leagues.get(leagueId)
   console.log('season during free agency:', leagueInFA?.season, leagueInFA?.phase)
   if (leagueInFA?.phase !== 'freeagency') throw new Error('League did not enter free agency phase')

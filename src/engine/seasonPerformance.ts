@@ -12,10 +12,48 @@ interface StatTotals {
   rushTDs: number
   recYards: number
   recTDs: number
+  tackles: number
+  sacks: number
+  tacklesForLoss: number
+  passBreakups: number
+  defInterceptions: number
+  yardsAllowed: number
+  pancakes: number
+  sacksAllowed: number
+  tflsAllowed: number
+  fieldGoalsMade: number
+  fieldGoalsAttempted: number
+  extraPointsMade: number
+  extraPointsAttempted: number
+  puntCount: number
+  puntYards: number
 }
 
 function emptyTotals(): StatTotals {
-  return { passYards: 0, passTDs: 0, interceptions: 0, rushYards: 0, rushTDs: 0, recYards: 0, recTDs: 0 }
+  return {
+    passYards: 0,
+    passTDs: 0,
+    interceptions: 0,
+    rushYards: 0,
+    rushTDs: 0,
+    recYards: 0,
+    recTDs: 0,
+    tackles: 0,
+    sacks: 0,
+    tacklesForLoss: 0,
+    passBreakups: 0,
+    defInterceptions: 0,
+    yardsAllowed: 0,
+    pancakes: 0,
+    sacksAllowed: 0,
+    tflsAllowed: 0,
+    fieldGoalsMade: 0,
+    fieldGoalsAttempted: 0,
+    extraPointsMade: 0,
+    extraPointsAttempted: 0,
+    puntCount: 0,
+    puntYards: 0,
+  }
 }
 
 export function aggregateSeasonStats(stats: PlayerGameStats[]): Map<number, StatTotals> {
@@ -29,14 +67,27 @@ export function aggregateSeasonStats(stats: PlayerGameStats[]): Map<number, Stat
     t.rushTDs += s.rushTDs
     t.recYards += s.recYards
     t.recTDs += s.recTDs
+    t.tackles += s.tackles
+    t.sacks += s.sacks
+    t.tacklesForLoss += s.tacklesForLoss
+    t.passBreakups += s.passBreakups
+    t.defInterceptions += s.defInterceptions
+    t.yardsAllowed += s.yardsAllowed
+    t.pancakes += s.pancakes
+    t.sacksAllowed += s.sacksAllowed
+    t.tflsAllowed += s.tflsAllowed
+    t.fieldGoalsMade += s.fieldGoalsMade
+    t.fieldGoalsAttempted += s.fieldGoalsAttempted
+    t.extraPointsMade += s.extraPointsMade
+    t.extraPointsAttempted += s.extraPointsAttempted
+    t.puntCount += s.puntCount
+    t.puntYards += s.puntYards
     totals.set(s.playerId, t)
   }
   return totals
 }
 
-/** Only positions with production stats worth judging a season by. */
-const SCORED_POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE']
-
+/** A rough "how good was this season" number for every position, higher is better. */
 function productionScore(position: Position, t: StatTotals): number {
   switch (position) {
     case 'QB':
@@ -46,10 +97,32 @@ function productionScore(position: Position, t: StatTotals): number {
     case 'WR':
     case 'TE':
       return t.recYards + t.recTDs * 20
+    case 'OL':
+      return t.pancakes * 2 - t.sacksAllowed * 6 - t.tflsAllowed * 3
+    case 'DL':
+    case 'LB':
+      return t.tackles + t.sacks * 8 + t.tacklesForLoss * 4 + t.passBreakups * 3 + t.defInterceptions * 10
+    case 'CB':
+    case 'S':
+      return t.tackles * 0.5 + t.passBreakups * 4 + t.defInterceptions * 12 - t.yardsAllowed * 0.05
+    case 'K':
+      return (
+        t.fieldGoalsMade * 3 +
+        t.extraPointsMade -
+        (t.fieldGoalsAttempted - t.fieldGoalsMade) * 4 -
+        (t.extraPointsAttempted - t.extraPointsMade) * 3
+      )
+    case 'P':
+      return t.puntCount > 0 ? (t.puntYards / t.puntCount - 38) * t.puntCount : 0
     default:
       return 0
   }
 }
+
+const ALL_POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
+
+/** Only positions whose production score is meaningful for nudging future potential. */
+const SCORED_POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE']
 
 /**
  * A player's ceiling isn't fixed - a standout, MVP-caliber season should
@@ -95,4 +168,45 @@ export function adjustPotentialForSeason(players: Player[], seasonStats: PlayerG
       ratings: { ...p.ratings, potential: clampPotential(p.ratings.potential + delta, p.ratings.overall) },
     }
   })
+}
+
+export type SeasonGrade = 'A' | 'B' | 'C' | 'D' | 'F'
+
+/**
+ * A quick-glance letter grade for how a player's season went relative to
+ * their position peers league-wide (every team, not just one roster) -
+ * covers every position, not just the ones that feed potential above.
+ * Players with no recorded stats that season (didn't play, e.g. injured
+ * all year or a backup who never got in) get no grade.
+ */
+export function gradeSeasonPerformance(seasonStats: PlayerGameStats[]): Map<number, SeasonGrade> {
+  const totals = aggregateSeasonStats(seasonStats)
+  const positionByPlayer = new Map<number, Position>()
+  for (const s of seasonStats) positionByPlayer.set(s.playerId, s.position)
+
+  const grades = new Map<number, SeasonGrade>()
+
+  for (const position of ALL_POSITIONS) {
+    const scored = [...positionByPlayer.entries()]
+      .filter(([, pos]) => pos === position)
+      .map(([id]) => ({ id, score: productionScore(position, totals.get(id)!) }))
+    if (scored.length < 3) continue
+
+    const mean = scored.reduce((sum, s) => sum + s.score, 0) / scored.length
+    const variance = scored.reduce((sum, s) => sum + (s.score - mean) ** 2, 0) / scored.length
+    const stdev = Math.sqrt(variance)
+
+    for (const s of scored) {
+      const z = stdev > 0 ? (s.score - mean) / stdev : 0
+      let grade: SeasonGrade
+      if (z >= 1.2) grade = 'A'
+      else if (z >= 0.4) grade = 'B'
+      else if (z > -0.4) grade = 'C'
+      else if (z > -1.2) grade = 'D'
+      else grade = 'F'
+      grades.set(s.id, grade)
+    }
+  }
+
+  return grades
 }

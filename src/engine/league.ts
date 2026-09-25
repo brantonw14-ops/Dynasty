@@ -424,10 +424,26 @@ export async function advanceToFreeAgency(leagueId: number) {
   const { retiredIds, agedPlayers } = ageAndRetire(rng, withUpdatedPotential)
   const progressedPlayers = agedPlayers.map((p) => progressPlayer(rng, p))
   const expiredPlayers = expireContracts(progressedPlayers)
-  if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
-  await db.players.bulkPut(expiredPlayers as never[])
 
-  const freeAgentCount = expiredPlayers.filter((p) => p.teamId === null).length
+  // expireContracts releases every expiring player straight to free agency,
+  // which is right for AI teams but would skip the user's own front office
+  // decision entirely. Re-attach the user's own players whose contracts
+  // just expired to their team (still with no contract - they show up in
+  // the resign window as needing a decision) so the user gets a chance to
+  // re-sign or extend them before openFreeAgency releases anyone they
+  // didn't act on.
+  const finalPlayers =
+    league.userTeamId == null
+      ? expiredPlayers
+      : expiredPlayers.map((p, i) => {
+          const wasUserPlayer = progressedPlayers[i].teamId === league.userTeamId
+          return wasUserPlayer && p.teamId === null ? { ...p, teamId: league.userTeamId } : p
+        })
+
+  if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
+  await db.players.bulkPut(finalPlayers as never[])
+
+  const freeAgentCount = finalPlayers.filter((p) => p.teamId === null).length
 
   const nextSeason = league.season + 1
   await db.leagues.update(leagueId, {
@@ -452,11 +468,53 @@ export async function cutPlayer(leagueId: number, playerId: number) {
   await db.players.update(playerId, { teamId: null, contract: null })
 }
 
-/** Closes the resign window and opens free agency for the user to shop the pool. */
+/**
+ * Re-signs a player already on the user's team during the resign window -
+ * either a just-expired contract (contract is null) or an extension of a
+ * player who's still under one. Salary is the same market-rate curve used
+ * everywhere else, shown to the user up front (no hidden RNG variance)
+ * since this is a decision the user is actively making, not an AI auto-sign.
+ */
+export async function resignPlayer(leagueId: number, playerId: number, years: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) throw new Error('League not found')
+  if (league.phase !== 'resign') throw new Error('Can only resign players before free agency opens')
+  if (league.userTeamId == null) throw new Error('League has no user team')
+  if (years < 1 || years > 4) throw new Error('Contract length must be between 1 and 4 years')
+
+  const player = await db.players.get(playerId)
+  if (!player || player.teamId !== league.userTeamId) throw new Error('Player is not on your team')
+
+  const roster = await db.players.where('teamId').equals(league.userTeamId).toArray()
+  const capSpace = computeCapSpace(roster.filter((p) => p.id !== playerId))
+  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age))
+  if (salary > capSpace) throw new Error('Not enough cap space for this contract')
+
+  await db.players.update(playerId, { contract: { salary, yearsLeft: years } })
+  return { salary }
+}
+
+/**
+ * Closes the resign window and opens free agency for the user to shop the
+ * pool. Any of the user's own players who weren't re-signed, extended, or
+ * cut during the resign window (their contract expired and nothing was
+ * decided) are released to free agency now, same as every other team's
+ * uncontested expirations already were.
+ */
 export async function openFreeAgency(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
   if (league.phase !== 'resign') throw new Error('Not in the resign window')
+  if (league.userTeamId != null) {
+    const undecided = await db.players
+      .where('teamId')
+      .equals(league.userTeamId)
+      .and((p) => p.contract === null)
+      .toArray()
+    if (undecided.length > 0) {
+      await db.players.bulkPut(undecided.map((p) => ({ ...p, teamId: null })) as never[])
+    }
+  }
 
   await db.leagues.update(leagueId, { phase: 'freeagency' })
 }

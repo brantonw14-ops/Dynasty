@@ -12,14 +12,25 @@ import {
   previewLeagueTeams,
   proceedToDraft,
   proposeTrade,
+  resignPlayer,
   signFreeAgent,
   simWeek,
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
 import { computePositionOverall, computeTeamOverall, POSITION_ATTRIBUTES, rosterNeeds } from './engine/players'
+import { marketSalary } from './engine/salary'
+import { gradeSeasonPerformance, type SeasonGrade } from './engine/seasonPerformance'
 import { computeConferenceSeeds, computeStandings } from './engine/standings'
 import type { Conference, Division, GameResult, LeaguePhase, Player, PlayoffRound, Position, Team } from './types'
+
+const GRADE_COLORS: Record<SeasonGrade, string> = {
+  A: 'text-green-400',
+  B: 'text-emerald-300',
+  C: 'text-gray-300',
+  D: 'text-orange-400',
+  F: 'text-red-400',
+}
 
 const OUTLOOK_LABELS: Record<TeamPreview['outlook'], string> = {
   rebuilding: 'Rebuilding',
@@ -529,7 +540,15 @@ function HistoryView({
   )
 }
 
-function StatsLeadersView({ leagueId, season }: { leagueId: number; season: number }) {
+function StatsLeadersView({
+  leagueId,
+  season,
+  userTeamId,
+}: {
+  leagueId: number
+  season: number
+  userTeamId: number | null
+}) {
   const stats = useLiveQuery(
     () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
     [leagueId, season],
@@ -552,6 +571,9 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
     rushTDs: number
     recYards: number
     recTDs: number
+    tackles: number
+    sacks: number
+    tacklesForLoss: number
   }
   const totals = new Map<number, StatTotals>()
   for (const s of stats) {
@@ -565,6 +587,9 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
       rushTDs: 0,
       recYards: 0,
       recTDs: 0,
+      tackles: 0,
+      sacks: 0,
+      tacklesForLoss: 0,
     }
     t.passYards += s.passYards
     t.passTDs += s.passTDs
@@ -575,6 +600,9 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
     t.rushTDs += s.rushTDs
     t.recYards += s.recYards
     t.recTDs += s.recTDs
+    t.tackles += s.tackles
+    t.sacks += s.sacks
+    t.tacklesForLoss += s.tacklesForLoss
     totals.set(s.playerId, t)
   }
 
@@ -593,6 +621,9 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
     { title: 'Rushing TDs', unit: 'TD', rows: topBy('rushTDs') },
     { title: 'Receiving Yards', unit: 'yds', rows: topBy('recYards', 'recTDs') },
     { title: 'Receiving TDs', unit: 'TD', rows: topBy('recTDs') },
+    { title: 'Tackles', unit: 'tkl', rows: topBy('tackles') },
+    { title: 'Sacks', unit: 'sacks', rows: topBy('sacks') },
+    { title: 'Tackles for Loss', unit: 'TFL', rows: topBy('tacklesForLoss') },
   ]
 
   const nameFor = (playerId: number) => {
@@ -600,6 +631,11 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
     if (!p) return `Player ${playerId}`
     const team = p.teamId != null ? teamById.get(p.teamId) : undefined
     return `${p.firstName} ${p.lastName}${team ? ` (${team.abbrev})` : ''}`
+  }
+
+  const isUserPlayer = (playerId: number) => {
+    const p = playerById.get(playerId)
+    return p != null && p.teamId != null && p.teamId === userTeamId
   }
 
   return (
@@ -613,8 +649,11 @@ function StatsLeadersView({ leagueId, season }: { leagueId: number; season: numb
             <table className="w-full text-sm border-collapse">
               <tbody>
                 {cat.rows.map((r, i) => (
-                  <tr key={r.playerId} className="border-b">
-                    <td className="py-1 text-gray-400 w-5">{i + 1}</td>
+                  <tr
+                    key={r.playerId}
+                    className={`border-b ${isUserPlayer(r.playerId) ? 'bg-blue-900/50 border-l-2 border-l-blue-400 text-blue-100 font-medium' : ''}`}
+                  >
+                    <td className="py-1 text-gray-400 w-5 pl-1">{i + 1}</td>
                     <td className="py-1">{nameFor(r.playerId)}</td>
                     <td className="py-1 text-right">
                       {r.value.toLocaleString()} {cat.unit}
@@ -646,29 +685,52 @@ function ResignView({
     () => db.players.where('teamId').equals(userTeamId).toArray(),
     [userTeamId],
   )
-  const stats = useLiveQuery(
+  // Unfiltered by team on purpose - grading needs the whole league's stats
+  // so a player's season is judged against every peer at their position,
+  // not just their own 52 teammates.
+  const leagueStats = useLiveQuery(
     () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season - 1]).toArray(),
     [leagueId, season],
   )
   const [cuttingId, setCuttingId] = useState<number | null>(null)
+  const [resigningId, setResigningId] = useState<number | null>(null)
+  const [yearsByPlayer, setYearsByPlayer] = useState<Map<number, number>>(new Map())
+  const [error, setError] = useState<string | null>(null)
   const [opening, setOpening] = useState(false)
 
-  if (!roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
+  if (!roster || !leagueStats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
   const statTotals = new Map<number, number>()
-  for (const s of stats) {
+  for (const s of leagueStats) {
     const total = s.passYards + s.rushYards + s.recYards + (s.passTDs + s.rushTDs + s.recTDs) * 20
     statTotals.set(s.playerId, (statTotals.get(s.playerId) ?? 0) + total)
   }
+  const grades = gradeSeasonPerformance(leagueStats)
 
   const capSpace = computeCapSpace(roster)
+  const yearsFor = (playerId: number) => yearsByPlayer.get(playerId) ?? 2
 
   const handleCut = async (playerId: number) => {
+    setError(null)
     setCuttingId(playerId)
     try {
       await cutPlayer(leagueId, playerId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setCuttingId(null)
+    }
+  }
+
+  const handleResign = async (playerId: number) => {
+    setError(null)
+    setResigningId(playerId)
+    try {
+      await resignPlayer(leagueId, playerId, yearsFor(playerId))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setResigningId(null)
     }
   }
 
@@ -683,13 +745,20 @@ function ResignView({
   }
 
   const sorted = [...roster].sort((a, b) => b.ratings.overall - a.ratings.overall)
+  const needsDecisionCount = roster.filter((p) => p.contract === null).length
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-gray-500">
-          Review your roster and cut anyone you don't want before free agency opens. Cap space{' '}
-          {formatMoney(capSpace)}
+          Re-sign expiring contracts, extend anyone you want to lock up longer, or cut players you don't
+          want - all before free agency opens. Cap space {formatMoney(capSpace)}
+          {needsDecisionCount > 0 && (
+            <>
+              {' '}
+              &middot; <span className="text-amber-400">{needsDecisionCount} contract(s) need a decision</span>
+            </>
+          )}
         </p>
         <button
           onClick={handleOpen}
@@ -700,44 +769,86 @@ function ResignView({
         </button>
       </div>
 
-      <table className="w-full text-sm border-collapse">
+      {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+
+      <table className="text-sm border-collapse">
         <thead>
           <tr className="text-left text-gray-400 border-b">
-            <th className="py-1">Name</th>
-            <th className="py-1">Pos</th>
-            <th className="py-1 text-right">Age</th>
-            <th className="py-1 text-right">OVR</th>
-            <th className="py-1 text-right">Salary</th>
-            <th className="py-1 text-right">Yrs Left</th>
-            <th className="py-1 text-right">Last Season</th>
-            <th className="py-1"></th>
+            <th className="py-1 pr-6 min-w-[11rem]">Name</th>
+            <th className="py-1 px-2">Pos</th>
+            <th className="py-1 px-2 text-right">Age</th>
+            <th className="py-1 px-2 text-right">OVR</th>
+            <th className="py-1 px-2 text-right">Grade</th>
+            <th className="py-1 pl-6 text-left">Last Season</th>
+            <th className="py-1 pl-4 pr-2 text-right">Salary</th>
+            <th className="py-1 px-2 text-right">Yrs Left</th>
+            <th className="py-1 pl-4"></th>
           </tr>
         </thead>
         <tbody>
-          {sorted.map((p) => (
-            <tr key={p.id} className="border-b">
-              <td className="py-1">
-                {p.firstName} {p.lastName}
-              </td>
-              <td className="py-1">{p.position}</td>
-              <td className="py-1 text-right">{p.age}</td>
-              <td className="py-1 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
-              <td className="py-1 text-right">{p.contract ? formatMoney(p.contract.salary) : '-'}</td>
-              <td className="py-1 text-right">{p.contract?.yearsLeft ?? '-'}</td>
-              <td className="py-1 text-right text-gray-500">
-                {statTotals.has(p.id) ? statTotals.get(p.id) : '-'}
-              </td>
-              <td className="py-1 text-right">
-                <button
-                  onClick={() => handleCut(p.id)}
-                  disabled={cuttingId === p.id}
-                  className="px-2 py-1 border rounded text-xs disabled:opacity-40"
-                >
-                  {cuttingId === p.id ? 'Cutting...' : 'Cut'}
-                </button>
-              </td>
-            </tr>
-          ))}
+          {sorted.map((p) => {
+            const grade = grades.get(p.id)
+            const estSalary = marketSalary(p.position, p.ratings.overall, p.age)
+            return (
+              <tr key={p.id} className="border-b">
+                <td className="py-1 pr-6 whitespace-nowrap">
+                  {p.firstName} {p.lastName}
+                  {p.contract === null && (
+                    <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-900 text-amber-200">
+                      expiring
+                    </span>
+                  )}
+                </td>
+                <td className="py-1 px-2">{p.position}</td>
+                <td className="py-1 px-2 text-right">{p.age}</td>
+                <td className="py-1 px-2 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                <td className={`py-1 px-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-600'}`}>
+                  {grade ?? '-'}
+                </td>
+                <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
+                  {statTotals.has(p.id) ? statTotals.get(p.id) : '-'}
+                </td>
+                <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
+                  {p.contract ? formatMoney(p.contract.salary) : '-'}
+                </td>
+                <td className="py-1 px-2 text-right">{p.contract?.yearsLeft ?? '-'}</td>
+                <td className="py-1 pl-4">
+                  <div className="flex items-center gap-1 justify-end">
+                    <select
+                      className="border rounded text-xs px-1 py-1 bg-transparent"
+                      value={yearsFor(p.id)}
+                      onChange={(e) => {
+                        const next = new Map(yearsByPlayer)
+                        next.set(p.id, Number(e.target.value))
+                        setYearsByPlayer(next)
+                      }}
+                    >
+                      {[1, 2, 3, 4].map((y) => (
+                        <option key={y} value={y} className="text-black">
+                          {y}yr
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => handleResign(p.id)}
+                      disabled={resigningId === p.id}
+                      title={`Est. ${formatMoney(estSalary)}/yr`}
+                      className="px-2 py-1 border rounded text-xs disabled:opacity-40 whitespace-nowrap"
+                    >
+                      {resigningId === p.id ? '...' : p.contract ? 'Extend' : 'Resign'}
+                    </button>
+                    <button
+                      onClick={() => handleCut(p.id)}
+                      disabled={cuttingId === p.id}
+                      className="px-2 py-1 border rounded text-xs disabled:opacity-40"
+                    >
+                      {cuttingId === p.id ? '...' : 'Cut'}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -1171,7 +1282,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             <RosterView teamId={league.userTeamId} leagueId={leagueId} season={league.season} editable />
           )}
           {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
-          {tab === 'stats' && <StatsLeadersView leagueId={leagueId} season={league.season} />}
+          {tab === 'stats' && (
+            <StatsLeadersView leagueId={leagueId} season={league.season} userTeamId={league.userTeamId} />
+          )}
           {tab === 'history' && (
             <HistoryView leagueId={leagueId} userTeamId={league.userTeamId} teamName={teamName} />
           )}
