@@ -17,6 +17,7 @@ import {
   proposeTrade,
   resignPlayer,
   signFreeAgent,
+  simRestOfDraft,
   simWeek,
 } from '../src/engine/league'
 import { POSITION_AGE_PROFILE } from '../src/engine/ages'
@@ -809,9 +810,12 @@ async function main() {
 
   // Every team gets exactly one pick per round now (best-player-available
   // once their needs are filled, not skipped) - the user should get
-  // exactly DRAFT_ROUNDS picks total, one per round.
+  // exactly DRAFT_ROUNDS picks total, one per round. Only drive the first
+  // 3 rounds interactively, then hand the rest to simRestOfDraft (the "Sim
+  // Rest of Draft" button) to exercise that escape hatch too.
+  const MANUAL_ROUNDS = 3
   let guard = 0
-  while (board && board.pickedIndices.size < board.totalPicks && guard < board.totalPicks + 5) {
+  while (board && draftedCount < MANUAL_ROUNDS && board.pickedIndices.size < board.totalPicks && guard < board.totalPicks + 5) {
     guard++
     if (!board.isUserTurn) break // AI-only remainder already resolved internally
     const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
@@ -826,9 +830,18 @@ async function main() {
     board = await getDraftBoard(leagueId)
   }
   console.log(`OK: user made ${draftedCount} draft picks interactively`)
-  if (draftedCount !== DRAFT_ROUNDS) {
-    throw new Error(`Expected the user to get exactly ${DRAFT_ROUNDS} draft picks (one per round), got ${draftedCount}`)
+  if (draftedCount !== MANUAL_ROUNDS) {
+    throw new Error(`Expected to make exactly ${MANUAL_ROUNDS} manual picks before handing off, got ${draftedCount}`)
   }
+
+  await simRestOfDraft(leagueId)
+  const leagueAfterSim = await db.leagues.get(leagueId)
+  if (leagueAfterSim?.phase !== 'regular') {
+    throw new Error(`Expected simRestOfDraft to finish the draft and roll into the regular season, phase is ${leagueAfterSim?.phase}`)
+  }
+  const userRosterAfterSim = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
+  draftedCount = userRosterAfterSim.filter((p) => p.contract?.yearsLeft === 4).length
+  console.log(`OK: simRestOfDraft auto-drafted the remaining rounds (user roster now has ${draftedCount} rookie-contract players)`)
 
   const rosterCountAfter = await db.players.count()
   const leagueAfterOffseason = await db.leagues.get(leagueId)

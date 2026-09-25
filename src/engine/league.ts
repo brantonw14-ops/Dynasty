@@ -829,6 +829,16 @@ export async function makeUserDraftPick(leagueId: number, prospectIndex: number)
   await advanceDraft(leagueId, { stopBeforeUserTurn: true })
 }
 
+/**
+ * Auto-picks the rest of the draft, including the user's remaining picks
+ * (same best-player-available logic AI teams use) - an escape hatch for
+ * when a user just wants to see the rookie class land and move on, or gets
+ * stuck unable to make a pick for any reason.
+ */
+export async function simRestOfDraft(leagueId: number) {
+  await advanceDraft(leagueId, { stopBeforeUserTurn: false })
+}
+
 async function finalizeDraft(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) return

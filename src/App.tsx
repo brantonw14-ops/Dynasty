@@ -18,6 +18,7 @@ import {
   proposeTrade,
   resignPlayer,
   signFreeAgent,
+  simRestOfDraft,
   simWeek,
   type TeamPreview,
 } from './engine/league'
@@ -111,12 +112,29 @@ function SortHeader({
  * A "how strong is each position on my team" grid, click a tile to expand
  * it and see/cut individual players - shared by the Free Agency and Draft
  * screens so a user can see what they need and make room for it (by
- * cutting someone) without leaving to the Roster screen.
+ * cutting someone) without leaving to the Roster screen. Clicking a tile
+ * also reports the selection up via `onSelectPosition`, so the caller can
+ * filter its own available-players list down to just that position.
  */
-function TeamPositionPanel({ roster, leagueId, needs }: { roster: Player[]; leagueId: number; needs: Position[] }) {
-  const [expanded, setExpanded] = useState<Position | null>(null)
+function TeamPositionPanel({
+  roster,
+  leagueId,
+  needs,
+  onSelectPosition,
+}: {
+  roster: Player[]
+  leagueId: number
+  needs: Position[]
+  onSelectPosition?: (pos: Position | null) => void
+}) {
+  const [expanded, setExpandedState] = useState<Position | null>(null)
   const [cuttingId, setCuttingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const setExpanded = (pos: Position | null) => {
+    setExpandedState(pos)
+    onSelectPosition?.(pos)
+  }
 
   const byPosition = new Map<Position, Player[]>()
   for (const p of roster) {
@@ -168,7 +186,7 @@ function TeamPositionPanel({ roster, leagueId, needs }: { roster: Player[]; leag
       </div>
       <p className="text-xs text-gray-600 mt-1">
         Position overall reflects your starters, not a flat roster average. Amber = a position you currently need.
-        Click a position to see and cut individual players.
+        Click a position to see/cut individual players and filter the list below to just that position.
       </p>
       {expanded && (
         <div className="mt-2 border rounded p-2 overflow-x-auto">
@@ -223,16 +241,27 @@ function TeamPositionPanel({ roster, leagueId, needs }: { roster: Player[]; leag
   )
 }
 
-/** Generic sort by a value-extractor keyed off SortState.key; falls back to leaving order unchanged for an unknown key. */
-function sortRows<T>(rows: T[], sort: SortState, valueFor: (row: T, key: string) => number | string): T[] {
+/**
+ * Generic sort by a value-extractor keyed off SortState.key; falls back to
+ * leaving order unchanged for an unknown key. When two rows tie on the
+ * primary key (most commonly Position, where every player at a position
+ * ties), `tiebreak` breaks the tie by descending value (e.g. overall) so
+ * ties don't fall back to whatever order the data happened to load in.
+ */
+function sortRows<T>(
+  rows: T[],
+  sort: SortState,
+  valueFor: (row: T, key: string) => number | string,
+  tiebreak?: (row: T) => number,
+): T[] {
   const dir = sort.dir === 'asc' ? 1 : -1
   return [...rows].sort((a, b) => {
     const va = valueFor(a, sort.key)
     const vb = valueFor(b, sort.key)
-    if (typeof va === 'string' || typeof vb === 'string') {
-      return String(va).localeCompare(String(vb)) * dir
-    }
-    return (va - vb) * dir
+    const cmp =
+      typeof va === 'string' || typeof vb === 'string' ? String(va).localeCompare(String(vb)) * dir : (va - vb) * dir
+    if (cmp !== 0) return cmp
+    return tiebreak ? tiebreak(b) - tiebreak(a) : 0
   })
 }
 
@@ -644,18 +673,23 @@ function GameReportView({
     : []
   const selectedGame = sortedGames.find((g) => g.id === selectedGameId) ?? sortedGames[0] ?? null
 
-  const statsForGame = useLiveQuery(
+  // playerGameStats only indexes [leagueId+season] and playerId (see db's
+  // schema comment) - gameId/teamId are filtered in memory from that
+  // season's rows, same as every other stats query in this app. Querying
+  // .where('gameId') directly throws (not an indexed keyPath), which is
+  // what was breaking this whole screen.
+  const seasonStats = useLiveQuery(
     (): Promise<PlayerGameStats[]> =>
-      selectedGame
-        ? db.playerGameStats.where('gameId').equals(selectedGame.id).toArray()
-        : Promise.resolve([]),
-    [selectedGame?.id],
+      db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
+    [leagueId, season],
   )
 
-  if (!games || !roster || !statsForGame) return <p className="text-sm text-gray-500">Loading game report...</p>
+  if (!games || !roster || !seasonStats) return <p className="text-sm text-gray-500">Loading game report...</p>
   if (sortedGames.length === 0 || !selectedGame) {
     return <p className="text-sm text-gray-500">No games played yet this season.</p>
   }
+
+  const statsForGame = seasonStats.filter((s) => s.gameId === selectedGame.id)
 
   const isHome = selectedGame.homeTeamId === userTeamId
   const myScore = isHome ? selectedGame.homeScore : selectedGame.awayScore
@@ -828,11 +862,16 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
         </tr>
       </thead>
       <tbody>
-        {sortRows(roster, sort, (p, key) => {
-          if (key === 'name') return `${p.firstName} ${p.lastName}`
-          if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
-          return p.ratings.overall
-        }).map((p) => (
+        {sortRows(
+          roster,
+          sort,
+          (p, key) => {
+            if (key === 'name') return `${p.firstName} ${p.lastName}`
+            if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
+            return p.ratings.overall
+          },
+          (p) => p.ratings.overall,
+        ).map((p) => (
           <tr key={p.id} className="border-b">
             <td className="py-1">
               <input
@@ -1174,17 +1213,22 @@ function ResignView({
     }
   }
 
-  const sorted = sortRows(roster, sort, (p, key) => {
-    if (key === 'name') return `${p.firstName} ${p.lastName}`
-    if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
-    if (key === 'age') return p.age
-    if (key === 'pot') return p.ratings.potential
-    if (key === 'grade') return grades.get(p.id) ?? ''
-    if (key === 'salary') return p.contract?.salary ?? -1
-    if (key === 'yrs') return p.contract?.yearsLeft ?? -1
-    if (key === 'asking') return marketSalary(p.position, p.ratings.overall, p.age)
-    return p.ratings.overall
-  })
+  const sorted = sortRows(
+    roster,
+    sort,
+    (p, key) => {
+      if (key === 'name') return `${p.firstName} ${p.lastName}`
+      if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
+      if (key === 'age') return p.age
+      if (key === 'pot') return p.ratings.potential
+      if (key === 'grade') return grades.get(p.id) ?? ''
+      if (key === 'salary') return p.contract?.salary ?? -1
+      if (key === 'yrs') return p.contract?.yearsLeft ?? -1
+      if (key === 'asking') return marketSalary(p.position, p.ratings.overall, p.age)
+      return p.ratings.overall
+    },
+    (p) => p.ratings.overall,
+  )
   const needsDecisionCount = roster.filter((p) => p.contract === null).length
 
   return (
@@ -1332,19 +1376,26 @@ function FreeAgencyView({
   const [error, setError] = useState<string | null>(null)
   const [advancing, setAdvancing] = useState(false)
   const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
+  const [positionFilter, setPositionFilter] = useState<Position | null>(null)
 
   if (!roster || !freeAgents) return <p className="text-sm text-gray-500">Loading free agents...</p>
 
   const needs = rosterNeeds(roster)
   const capSpace = computeCapSpace(roster)
 
-  const sorted = sortRows(freeAgents, sort, (p, key) => {
-    if (key === 'name') return `${p.firstName} ${p.lastName}`
-    if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
-    if (key === 'age') return p.age
-    if (key === 'asking') return estimateFreeAgentAsk(season, p).salary
-    return p.ratings.overall
-  })
+  const filtered = positionFilter ? freeAgents.filter((p) => p.position === positionFilter) : freeAgents
+  const sorted = sortRows(
+    filtered,
+    sort,
+    (p, key) => {
+      if (key === 'name') return `${p.firstName} ${p.lastName}`
+      if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
+      if (key === 'age') return p.age
+      if (key === 'asking') return estimateFreeAgentAsk(season, p).salary
+      return p.ratings.overall
+    },
+    (p) => p.ratings.overall,
+  )
 
   const handleSign = async (playerId: number) => {
     setError(null)
@@ -1388,7 +1439,15 @@ function FreeAgencyView({
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
 
-      <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} />
+      <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} onSelectPosition={setPositionFilter} />
+      {positionFilter && (
+        <p className="text-xs text-blue-300 mb-2">
+          Showing {positionFilter} only -{' '}
+          <button className="underline" onClick={() => setPositionFilter(null)}>
+            clear filter
+          </button>
+        </p>
+      )}
 
       <table className="w-full text-sm border-collapse">
         <thead>
@@ -1432,7 +1491,7 @@ function FreeAgencyView({
           {sorted.length === 0 && (
             <tr>
               <td colSpan={6} className="text-sm text-gray-500 py-2">
-                No free agents available.
+                {positionFilter ? `No ${positionFilter} free agents available.` : 'No free agents available.'}
               </td>
             </tr>
           )}
@@ -1467,20 +1526,30 @@ function DraftView({
   const [pickingIndex, setPickingIndex] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
+  const [positionFilter, setPositionFilter] = useState<Position | null>(null)
+  const [subTab, setSubTab] = useState<'board' | 'mypicks'>('board')
+  const [simming, setSimming] = useState(false)
 
   if (board === undefined || !userRoster) return <p className="text-sm text-gray-500">Loading draft board...</p>
   if (board === null) return <p className="text-sm text-gray-500">No draft in progress.</p>
 
   const userNeeds = new Set(rosterNeeds(userRoster))
   const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
-  const sorted = sortRows(available, sort, (p, key) => {
-    if (key === 'name') return `${p.firstName} ${p.lastName}`
-    if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
-    if (key === 'age') return p.age
-    if (key === 'college') return p.college
-    if (key === 'pot') return p.ratings.potential
-    return p.ratings.overall
-  })
+  const filtered = positionFilter ? available.filter((p) => p.position === positionFilter) : available
+  const sorted = sortRows(
+    filtered,
+    sort,
+    (p, key) => {
+      if (key === 'name') return `${p.firstName} ${p.lastName}`
+      if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
+      if (key === 'age') return p.age
+      if (key === 'college') return p.college
+      if (key === 'pot') return p.ratings.potential
+      return p.ratings.overall
+    },
+    (p) => p.ratings.overall,
+  )
+  const myPicks = userTeamId == null ? [] : board.log.filter((entry) => entry.teamId === userTeamId)
 
   const handlePick = async (prospectIndex: number) => {
     setError(null)
@@ -1494,19 +1563,49 @@ function DraftView({
     }
   }
 
+  const handleSimRest = async () => {
+    if (
+      !window.confirm(
+        'Auto-draft the rest of the draft, including any picks still left for your team? This cannot be undone.',
+      )
+    ) {
+      return
+    }
+    setError(null)
+    setSimming(true)
+    try {
+      await simRestOfDraft(leagueId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSimming(false)
+    }
+  }
+
   return (
     <div>
-      <p className="text-sm text-gray-500 mb-2">
-        Round {board.round} of {board.totalRounds} &middot; Pick {board.pickInRound} of {board.picksPerRound}{' '}
-        (#{board.pickNumber} overall)
-        {board.currentTeamId != null && (
-          <>
-            {' '}
-            &middot; On the clock: <span className={board.isUserTurn ? 'text-blue-300 font-semibold' : ''}>{teamName(board.currentTeamId)}</span>
-          </>
-        )}
-        {board.isUserTurn && <span className="ml-2 text-green-400 font-semibold">Your pick!</span>}
-      </p>
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <p className="text-sm text-gray-500">
+          Round {board.round} of {board.totalRounds} &middot; Pick {board.pickInRound} of {board.picksPerRound}{' '}
+          (#{board.pickNumber} overall)
+          {board.currentTeamId != null && (
+            <>
+              {' '}
+              &middot; On the clock:{' '}
+              <span className={board.isUserTurn ? 'text-blue-300 font-semibold' : ''}>{teamName(board.currentTeamId)}</span>
+            </>
+          )}
+          {board.isUserTurn && <span className="ml-2 text-green-400 font-semibold">Your pick!</span>}
+        </p>
+        <button
+          onClick={handleSimRest}
+          disabled={simming}
+          className="px-3 py-1.5 border rounded-md text-xs whitespace-nowrap disabled:opacity-50"
+          title="Auto-drafts every remaining pick, including yours, and moves straight to the regular season"
+        >
+          {simming ? 'Simming...' : 'Sim Rest of Draft'}
+        </button>
+      </div>
 
       {!board.isUserTurn && board.currentTeamId != null && (
         <p className="text-xs text-gray-600 mb-3">Waiting on {teamName(board.currentTeamId)} to pick...</p>
@@ -1532,67 +1631,141 @@ function DraftView({
       )}
 
       {userTeamId != null && (
-        <TeamPositionPanel roster={userRoster} leagueId={leagueId} needs={[...userNeeds]} />
+        <TeamPositionPanel roster={userRoster} leagueId={leagueId} needs={[...userNeeds]} onSelectPosition={setPositionFilter} />
       )}
 
-      <table className="w-full text-sm border-collapse">
-        <thead>
-          <tr className="text-left text-gray-400 border-b">
-            <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-4" />
-            <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} className="pr-4" />
-            <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="pr-4 text-right" />
-            <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="pr-4 text-right" />
-            <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="pr-4 text-right" />
-            <SortHeader label="College" sortKey="college" sort={sort} setSort={setSort} className="pr-4" />
-            <th className="py-1 pr-4">College Stats</th>
-            <th className="py-1 pr-4">Scouting Report</th>
-            <th className="py-1"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((p) => {
-            const needed = userNeeds.has(p.position)
-            return (
-              <tr key={p.index} className="border-b align-top">
-                <td className="py-1 pr-4 whitespace-nowrap">
-                  {p.firstName} {p.lastName}
-                </td>
-                <td className="py-1 pr-4">
-                  {p.position}
-                  {needed && (
-                    <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-900 text-amber-200">need</span>
-                  )}
-                </td>
-                <td className="py-1 pr-4 text-right">{p.age}</td>
-                <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
-                <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
-                <td className="py-1 pr-4 whitespace-nowrap">
-                  {p.college}
-                  <div className="text-[10px] text-gray-600">{COLLEGE_TIER_LABELS[p.collegeTier]}</div>
-                </td>
-                <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{p.collegeStatLine}</td>
-                <td className="py-1 pr-4 text-gray-500 max-w-xs">{p.scoutingNote}</td>
-                <td className="py-1 text-right">
-                  <button
-                    onClick={() => handlePick(p.index)}
-                    disabled={!board.isUserTurn || pickingIndex === p.index}
-                    className="px-2 py-1 border rounded text-xs disabled:opacity-40 whitespace-nowrap"
-                  >
-                    {pickingIndex === p.index ? '...' : 'Draft'}
-                  </button>
+      {positionFilter && (
+        <p className="text-xs text-blue-300 mb-2">
+          Showing {positionFilter} only -{' '}
+          <button className="underline" onClick={() => setPositionFilter(null)}>
+            clear filter
+          </button>
+        </p>
+      )}
+
+      {userTeamId != null && (
+        <div className="flex gap-4 border-b mb-4">
+          <button
+            onClick={() => setSubTab('board')}
+            className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+              subTab === 'board' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+            }`}
+          >
+            Draft Board
+          </button>
+          <button
+            onClick={() => setSubTab('mypicks')}
+            className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+              subTab === 'mypicks' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+            }`}
+          >
+            My Picks ({myPicks.length})
+          </button>
+        </div>
+      )}
+
+      {subTab === 'mypicks' ? (
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="text-left text-gray-400 border-b">
+              <th className="py-1 pr-4">Pick</th>
+              <th className="py-1 pr-4">Name</th>
+              <th className="py-1 pr-4">Pos</th>
+              <th className="py-1 pr-4 text-right">Age</th>
+              <th className="py-1 pr-4 text-right">OVR</th>
+              <th className="py-1 pr-4 text-right">POT</th>
+              <th className="py-1 pr-4">College</th>
+            </tr>
+          </thead>
+          <tbody>
+            {myPicks.map((entry) => {
+              const prospect = board.prospects[entry.prospectIndex]
+              const round = Math.floor((entry.pickNumber - 1) / board.picksPerRound) + 1
+              return (
+                <tr key={entry.pickNumber} className="border-b">
+                  <td className="py-1 pr-4 whitespace-nowrap">
+                    Rd {round}, Pick {entry.pickNumber}
+                  </td>
+                  <td className="py-1 pr-4 whitespace-nowrap">
+                    {prospect.firstName} {prospect.lastName}
+                  </td>
+                  <td className="py-1 pr-4">{prospect.position}</td>
+                  <td className="py-1 pr-4 text-right">{prospect.age}</td>
+                  <td className="py-1 pr-4 text-right text-green-400 font-semibold">{prospect.ratings.overall}</td>
+                  <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{prospect.ratings.potential}</td>
+                  <td className="py-1 pr-4 whitespace-nowrap">{prospect.college}</td>
+                </tr>
+              )
+            })}
+            {myPicks.length === 0 && (
+              <tr>
+                <td colSpan={7} className="text-sm text-gray-500 py-2">
+                  No picks made yet.
                 </td>
               </tr>
-            )
-          })}
-          {sorted.length === 0 && (
-            <tr>
-              <td colSpan={9} className="text-sm text-gray-500 py-2">
-                No prospects left on the board.
-              </td>
+            )}
+          </tbody>
+        </table>
+      ) : (
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="text-left text-gray-400 border-b">
+              <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-4" />
+              <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} className="pr-4" />
+              <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="pr-4 text-right" />
+              <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="pr-4 text-right" />
+              <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="pr-4 text-right" />
+              <SortHeader label="College" sortKey="college" sort={sort} setSort={setSort} className="pr-4" />
+              <th className="py-1 pr-4">College Stats</th>
+              <th className="py-1 pr-4">Scouting Report</th>
+              <th className="py-1"></th>
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {sorted.map((p) => {
+              const needed = userNeeds.has(p.position)
+              return (
+                <tr key={p.index} className="border-b align-top">
+                  <td className="py-1 pr-4 whitespace-nowrap">
+                    {p.firstName} {p.lastName}
+                  </td>
+                  <td className="py-1 pr-4">
+                    {p.position}
+                    {needed && (
+                      <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-900 text-amber-200">need</span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-4 text-right">{p.age}</td>
+                  <td className="py-1 pr-4 text-right text-green-400 font-semibold">{p.ratings.overall}</td>
+                  <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
+                  <td className="py-1 pr-4 whitespace-nowrap">
+                    {p.college}
+                    <div className="text-[10px] text-gray-600">{COLLEGE_TIER_LABELS[p.collegeTier]}</div>
+                  </td>
+                  <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{p.collegeStatLine}</td>
+                  <td className="py-1 pr-4 text-gray-500 max-w-xs">{p.scoutingNote}</td>
+                  <td className="py-1 text-right">
+                    <button
+                      onClick={() => handlePick(p.index)}
+                      disabled={!board.isUserTurn || pickingIndex === p.index}
+                      className="px-2 py-1 border rounded text-xs disabled:opacity-40 whitespace-nowrap"
+                    >
+                      {pickingIndex === p.index ? '...' : 'Draft'}
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+            {sorted.length === 0 && (
+              <tr>
+                <td colSpan={9} className="text-sm text-gray-500 py-2">
+                  {positionFilter ? `No ${positionFilter} prospects left on the board.` : 'No prospects left on the board.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }
