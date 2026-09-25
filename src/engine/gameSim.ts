@@ -137,8 +137,20 @@ export function simGame(rng: Rng, homeRoster: Player[], awayRoster: Player[]): S
   const homeExpected = 20 + (homeOff - awayDef) * 0.35 + 2 // home-field edge
   const awayExpected = 20 + (awayOff - homeDef) * 0.35
 
-  const homeScore = Math.max(0, Math.round(randNormal(rng, homeExpected, 8)))
-  const awayScore = Math.max(0, Math.round(randNormal(rng, awayExpected, 8)))
+  let homeScore = Math.max(0, Math.round(randNormal(rng, homeExpected, 8)))
+  let awayScore = Math.max(0, Math.round(randNormal(rng, awayExpected, 8)))
+
+  // Real NFL ties are rare (~0.1-0.2% of games); ours were landing far more
+  // often since two independent normal draws collide more than that. Send
+  // any regulation tie to a short overtime and force a winner, same as the
+  // real league effectively does outside the handful of true double-OT ties.
+  if (homeScore === awayScore) {
+    const otEdge = (homeOff - awayDef - (awayOff - homeDef)) * 0.01
+    const homeWinsOT = rng() < 0.5 + otEdge
+    const otPoints = rng() < 0.15 ? 3 : rng() < 0.5 ? 6 : 7 // FG, or a TD (2pt fails sometimes)
+    if (homeWinsOT) homeScore += otPoints
+    else awayScore += otPoints
+  }
 
   const homeBox = generateBoxScore(rng, homeRoster, homeScore)
   const awayBox = generateBoxScore(rng, awayRoster, awayScore)

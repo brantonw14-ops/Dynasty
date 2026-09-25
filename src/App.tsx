@@ -24,9 +24,9 @@ const OUTLOOK_LABELS: Record<TeamPreview['outlook'], string> = {
   superbowl: 'Super Bowl Worthy',
 }
 const OUTLOOK_STYLES: Record<TeamPreview['outlook'], string> = {
-  rebuilding: 'bg-gray-100 text-gray-600',
-  contender: 'bg-blue-100 text-blue-700',
-  superbowl: 'bg-amber-100 text-amber-800',
+  rebuilding: 'bg-slate-700 text-slate-200',
+  contender: 'bg-blue-900 text-blue-200',
+  superbowl: 'bg-amber-900 text-amber-200',
 }
 
 const POSITION_ORDER: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
@@ -276,7 +276,7 @@ function TradeView({ userTeamId }: { userTeamId: number }) {
           </button>
 
           {result && (
-            <p className={`text-sm mt-3 ${result.accepted ? 'text-green-600' : 'text-red-600'}`}>
+            <p className={`text-sm mt-3 ${result.accepted ? 'text-green-400' : 'text-red-400'}`}>
               {result.accepted ? 'Accepted: ' : 'Rejected: '}
               {result.reason}
             </p>
@@ -333,11 +333,11 @@ function HistoryView({
               <td className="py-1 pl-1">{h.season}</td>
               <td className="py-1">
                 🏆 {teamName(h.champTeamId)}
-                {h.champTeamId === userTeamId && <span className="text-xs text-blue-600"> (you)</span>}
+                {h.champTeamId === userTeamId && <span className="text-xs text-blue-400"> (you)</span>}
               </td>
               <td className="py-1">
                 {teamName(h.runnerUpTeamId)}
-                {h.runnerUpTeamId === userTeamId && <span className="text-xs text-blue-600"> (you)</span>}
+                {h.runnerUpTeamId === userTeamId && <span className="text-xs text-blue-400"> (you)</span>}
               </td>
               <td className="py-1 text-right">
                 {h.champScore}-{h.runnerUpScore}
@@ -507,7 +507,7 @@ function FreeAgencyView({
         </button>
       </div>
 
-      {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+      {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
 
       <table className="w-full text-sm border-collapse">
         <thead>
@@ -554,7 +554,9 @@ function FreeAgencyView({
 
 /** Highlights the user's own team wherever it shows up in a list/table. */
 function userRowClass(teamId: number, userTeamId: number | null) {
-  return teamId === userTeamId ? 'bg-blue-50 border-l-2 border-l-blue-600' : ''
+  return teamId === userTeamId
+    ? 'bg-blue-900/50 border-l-2 border-l-blue-400 text-blue-100 font-medium'
+    : ''
 }
 
 function StandingsTable({
@@ -787,8 +789,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
       </div>
 
       {league.phase === 'complete' && league.champTeamId != null && (
-        <div className="mb-6 border rounded-md px-4 py-3 bg-yellow-50 text-sm font-medium">
+        <div className="mb-6 border border-amber-700 rounded-md px-4 py-3 bg-amber-900/40 text-amber-200 text-sm font-medium">
           🏆 {teamName(league.champTeamId)} won the Super Bowl!
+          {league.champTeamId === league.userTeamId && ' (that\'s you!)'}
         </div>
       )}
 
@@ -947,7 +950,7 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
             setSeed(Date.now())
             setTeamIndex(null)
           }}
-          className="text-xs text-blue-600 underline shrink-0 ml-2"
+          className="text-xs text-blue-400 underline shrink-0 ml-2"
         >
           Reroll league
         </button>

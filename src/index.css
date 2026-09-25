@@ -1,19 +1,28 @@
 @import "tailwindcss";
 
 /*
- * This app has no dark theme built - `light dark` would let the browser
- * auto-invert default (unstyled) text/background colors when the OS is in
- * dark mode, which is exactly what made text go white on a still-white
- * page. Force light so colors stay what we actually designed regardless
- * of OS/browser preference.
+ * Dark theme, deliberately - not left to the browser/OS. `light dark` used
+ * to let the browser auto-invert default (unstyled) colors, which made text
+ * go invisible; this instead sets an actual dark palette so every element
+ * (including unclassed table/div borders from Tailwind's preflight, which
+ * otherwise default to a light gray meant for light backgrounds) renders
+ * correctly regardless of the visitor's OS/browser preference.
  */
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-  background: #fff;
-  color: #111827;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: #334155;
+  }
 }
