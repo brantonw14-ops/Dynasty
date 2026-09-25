@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { db } from '../src/db'
 import { advanceToNextSeason, createLeague, deleteLeague, simWeek } from '../src/engine/league'
+import { computeStandings } from '../src/engine/standings'
 
 const MAX_WEEKS = 40
 
@@ -53,6 +54,28 @@ async function assertSeasonSane(leagueId: number, season: number) {
   if (divisional.length !== 4) throw new Error(`Expected 4 divisional games, got ${divisional.length}`)
   if (conference.length !== 2) throw new Error(`Expected 2 conference games, got ${conference.length}`)
   if (superbowl.length !== 1) throw new Error(`Expected 1 Super Bowl game, got ${superbowl.length}`)
+
+  // Regression test: a team's standings record must count ALL its games, not
+  // just games against opponents who are also in the subset passed in (this
+  // broke the division standings table, which computes each division's
+  // 4-team standings against the full season's games).
+  const fullStandings = computeStandings(teams, regular)
+  const oneDivision = teams.filter(
+    (t) => t.conference === teams[0].conference && t.division === teams[0].division,
+  )
+  const divisionStandings = computeStandings(oneDivision, regular)
+  for (const divRow of divisionStandings) {
+    const fullRow = fullStandings.find((r) => r.teamId === divRow.teamId)!
+    const divTotal = divRow.wins + divRow.losses + divRow.ties
+    const fullTotal = fullRow.wins + fullRow.losses + fullRow.ties
+    if (divTotal !== fullTotal || divRow.wins !== fullRow.wins) {
+      throw new Error(
+        `Division-scoped standings for team ${divRow.teamId} (${divTotal} games, ${divRow.wins}W) ` +
+          `don't match full-season standings (${fullTotal} games, ${fullRow.wins}W)`,
+      )
+    }
+  }
+  console.log('OK: division-scoped standings match full-season record for every team')
 }
 
 async function main() {

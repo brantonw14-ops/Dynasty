@@ -28,22 +28,30 @@ export function computeStandings(teams: Team[], games: GameResult[]): StandingsR
   for (const g of games) {
     const home = rows.get(g.homeTeamId)
     const away = rows.get(g.awayTeamId)
-    if (!home || !away) continue
+    if (!home && !away) continue
 
-    home.pointsFor += g.homeScore
-    home.pointsAgainst += g.awayScore
-    away.pointsFor += g.awayScore
-    away.pointsAgainst += g.homeScore
+    // A team's record counts every game it played, regardless of whether its
+    // opponent is also in `teams` - callers often pass a subset (one
+    // division, one conference) and most of a team's games are against
+    // teams outside that subset.
+    if (home) {
+      home.pointsFor += g.homeScore
+      home.pointsAgainst += g.awayScore
+    }
+    if (away) {
+      away.pointsFor += g.awayScore
+      away.pointsAgainst += g.homeScore
+    }
 
     if (g.homeScore > g.awayScore) {
-      home.wins++
-      away.losses++
+      if (home) home.wins++
+      if (away) away.losses++
     } else if (g.awayScore > g.homeScore) {
-      away.wins++
-      home.losses++
+      if (away) away.wins++
+      if (home) home.losses++
     } else {
-      home.ties++
-      away.ties++
+      if (home) home.ties++
+      if (away) away.ties++
     }
   }
 
