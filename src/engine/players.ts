@@ -39,6 +39,19 @@ function generateRatings(rng: Rng): Ratings {
   }
 }
 
+/**
+ * Salary scales with overall rating (roughly matching the market-rate
+ * formula free agency/trades use elsewhere), with some random variance.
+ * Tuned so a full roster averages well under the cap - real teams carry
+ * meaningful cap space, not exactly $0 of it, and leaving room is what
+ * makes free agency and trades actually possible instead of instantly
+ * cap-blocked.
+ */
+function generateContractSalary(rng: Rng, overall: number) {
+  const base = 600_000 + Math.max(0, overall - 50) * 220_000
+  return Math.round(base * (0.8 + rng() * 0.4))
+}
+
 export function generatePlayer(rng: Rng, position: Position, teamId: number | null): Omit<Player, 'id'> {
   const { firstName, lastName } = randomName(rng)
   const age = randInt(rng, 21, 33)
@@ -50,7 +63,10 @@ export function generatePlayer(rng: Rng, position: Position, teamId: number | nu
     position,
     teamId,
     ratings,
-    contract: teamId === null ? null : { salary: randInt(rng, 700_000, 8_000_000), yearsLeft: randInt(rng, 1, 4) },
+    contract:
+      teamId === null
+        ? null
+        : { salary: generateContractSalary(rng, ratings.overall), yearsLeft: randInt(rng, 1, 4) },
     retired: false,
   }
 }

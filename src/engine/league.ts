@@ -9,7 +9,8 @@ import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
 import { generateSchedule } from './schedule'
 import { computeConferenceSeeds, computeStandings, type PlayoffSeed } from './standings'
-import { generateTeams } from './teams'
+import { generateTeams, SALARY_CAP } from './teams'
+import { evaluateTrade, type TradeEvaluation } from './trades'
 
 export async function createLeague(name: string, userTeamIndex: number, seed = Date.now()) {
   const rng = createRng(seed)
@@ -366,4 +367,42 @@ export async function proceedToDraft(leagueId: number) {
   })
 
   return { draftedCount: picks.length }
+}
+
+/**
+ * Proposes a trade: teamA sends `giveIds` and receives `getIds` from teamB.
+ * teamB (typically an AI team) evaluates it from their own side; if
+ * accepted, the trade executes immediately. Also blocks the deal if it
+ * would put teamA over the salary cap - teamB's own roster-need and cap
+ * checks happen inside evaluateTrade.
+ */
+export async function proposeTrade(
+  teamAId: number,
+  teamBId: number,
+  giveIds: number[],
+  getIds: number[],
+): Promise<TradeEvaluation> {
+  const rosterA = await db.players.where('teamId').equals(teamAId).toArray()
+  const rosterB = await db.players.where('teamId').equals(teamBId).toArray()
+
+  const giving = rosterA.filter((p) => giveIds.includes(p.id))
+  const getting = rosterB.filter((p) => getIds.includes(p.id))
+  if (giving.length !== giveIds.length || getting.length !== getIds.length) {
+    return { accepted: false, reason: 'Invalid player selection' }
+  }
+
+  const evaluation = evaluateTrade(rosterB, getting, giving)
+  if (!evaluation.accepted) return evaluation
+
+  const givingIds = new Set(giveIds)
+  const resultingA = [...rosterA.filter((p) => !givingIds.has(p.id)), ...getting]
+  const capUsedA = resultingA.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
+  if (capUsedA > SALARY_CAP) {
+    return { accepted: false, reason: 'Would put your team over the salary cap' }
+  }
+
+  await db.players.bulkPut(giving.map((p) => ({ ...p, teamId: teamBId })) as never[])
+  await db.players.bulkPut(getting.map((p) => ({ ...p, teamId: teamAId })) as never[])
+
+  return evaluation
 }

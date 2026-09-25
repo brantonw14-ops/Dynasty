@@ -5,10 +5,12 @@ import {
   createLeague,
   deleteLeague,
   proceedToDraft,
+  proposeTrade,
   signFreeAgent,
   simWeek,
 } from '../src/engine/league'
 import { computeStandings } from '../src/engine/standings'
+import { playerValue } from '../src/engine/trades'
 
 const MAX_WEEKS = 40
 
@@ -91,6 +93,46 @@ async function main() {
   const teamCount = await db.teams.count()
   console.log('teams:', teamCount, '(expected 32)')
   if (teamCount !== 32) throw new Error('Expected 32 NFL teams')
+
+  await (async () => {
+    const startLeague = (await db.leagues.get(leagueId))!
+    const teams = await db.teams.toArray()
+    const otherTeam = teams.find((t) => t.id !== startLeague.userTeamId)!
+    const myRoster = await db.players.where('teamId').equals(startLeague.userTeamId!).toArray()
+    const theirRoster = await db.players.where('teamId').equals(otherTeam.id).toArray()
+
+    const myWorst = [...myRoster].sort((a, b) => a.ratings.overall - b.ratings.overall)[0]
+    const theirBest = [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+    const badTrade = await proposeTrade(startLeague.userTeamId!, otherTeam.id, [myWorst.id], [theirBest.id])
+    if (badTrade.accepted) throw new Error('AI accepted a lopsided trade in the user\'s favor')
+
+    let closest: { mine: (typeof myRoster)[number]; theirs: (typeof theirRoster)[number]; diff: number } | null =
+      null
+    for (const mine of myRoster) {
+      for (const theirs of theirRoster) {
+        if (mine.position !== theirs.position) continue
+        const diff = Math.abs(playerValue(mine) - playerValue(theirs))
+        if (!closest || diff < closest.diff) closest = { mine, theirs, diff }
+      }
+    }
+    if (!closest) throw new Error('No comparable same-position players found to test trades with')
+
+    const fairTrade = await proposeTrade(
+      startLeague.userTeamId!,
+      otherTeam.id,
+      [closest.mine.id],
+      [closest.theirs.id],
+    )
+    if (!fairTrade.accepted) {
+      throw new Error(`Expected the closest-value trade to be accepted, got: ${fairTrade.reason}`)
+    }
+    const movedToThem = await db.players.get(closest.mine.id)
+    const movedToMe = await db.players.get(closest.theirs.id)
+    if (movedToThem?.teamId !== otherTeam.id || movedToMe?.teamId !== startLeague.userTeamId) {
+      throw new Error('Accepted trade did not actually swap player teamIds')
+    }
+    console.log('OK: trade evaluation and execution work (rejects lopsided, accepts fair, swaps rosters)')
+  })()
 
   await playSeason(leagueId)
 

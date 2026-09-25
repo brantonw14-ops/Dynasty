@@ -6,6 +6,7 @@ import {
   createLeague,
   deleteLeague,
   proceedToDraft,
+  proposeTrade,
   signFreeAgent,
   simWeek,
 } from './engine/league'
@@ -89,6 +90,142 @@ function RosterView({ teamId }: { teamId: number }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function TradeView({ userTeamId }: { userTeamId: number }) {
+  const teams = useLiveQuery(() => db.teams.toArray(), [])
+  const myRoster = useLiveQuery(
+    () => db.players.where('teamId').equals(userTeamId).toArray(),
+    [userTeamId],
+  )
+  const [otherTeamId, setOtherTeamId] = useState<number | null>(null)
+  const [giveIds, setGiveIds] = useState<Set<number>>(new Set())
+  const [getIds, setGetIds] = useState<Set<number>>(new Set())
+  const [proposing, setProposing] = useState(false)
+  const [result, setResult] = useState<{ accepted: boolean; reason: string } | null>(null)
+
+  const otherRoster = useLiveQuery(
+    (): Promise<Player[]> =>
+      otherTeamId != null ? db.players.where('teamId').equals(otherTeamId).toArray() : Promise.resolve([]),
+    [otherTeamId],
+  )
+
+  if (!teams || !myRoster) return <p className="text-sm text-gray-500">Loading...</p>
+
+  const otherTeams = teams.filter((t) => t.id !== userTeamId)
+
+  const toggle = (set: Set<number>, setFn: (s: Set<number>) => void, id: number) => {
+    const next = new Set(set)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setFn(next)
+  }
+
+  const handlePropose = async () => {
+    if (otherTeamId == null) return
+    setProposing(true)
+    setResult(null)
+    try {
+      const outcome = await proposeTrade(userTeamId, otherTeamId, [...giveIds], [...getIds])
+      setResult(outcome)
+      if (outcome.accepted) {
+        setGiveIds(new Set())
+        setGetIds(new Set())
+      }
+    } finally {
+      setProposing(false)
+    }
+  }
+
+  const renderRoster = (
+    roster: Player[],
+    selected: Set<number>,
+    setFn: (s: Set<number>) => void,
+  ) => (
+    <table className="w-full text-sm border-collapse">
+      <thead>
+        <tr className="text-left text-gray-400 border-b">
+          <th className="py-1"></th>
+          <th className="py-1">Name</th>
+          <th className="py-1">Pos</th>
+          <th className="py-1 text-right">OVR</th>
+        </tr>
+      </thead>
+      <tbody>
+        {[...roster]
+          .sort((a, b) => b.ratings.overall - a.ratings.overall)
+          .map((p) => (
+            <tr key={p.id} className="border-b">
+              <td className="py-1">
+                <input
+                  type="checkbox"
+                  checked={selected.has(p.id)}
+                  onChange={() => toggle(selected, setFn, p.id)}
+                />
+              </td>
+              <td className="py-1">
+                {p.firstName} {p.lastName}
+              </td>
+              <td className="py-1">{p.position}</td>
+              <td className="py-1 text-right">{p.ratings.overall}</td>
+            </tr>
+          ))}
+      </tbody>
+    </table>
+  )
+
+  return (
+    <div>
+      <p className="text-sm text-gray-500 mb-2 text-left">Trade with</p>
+      <select
+        className="border rounded-md px-3 py-2 text-sm mb-4"
+        value={otherTeamId ?? ''}
+        onChange={(e) => {
+          setOtherTeamId(e.target.value ? Number(e.target.value) : null)
+          setGiveIds(new Set())
+          setGetIds(new Set())
+          setResult(null)
+        }}
+      >
+        <option value="">Select a team...</option>
+        {otherTeams.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.region} {t.name}
+          </option>
+        ))}
+      </select>
+
+      {otherTeamId != null && otherRoster && (
+        <>
+          <div className="grid grid-cols-2 gap-6 mb-4">
+            <div>
+              <h3 className="text-sm font-semibold mb-2">You give ({giveIds.size})</h3>
+              {renderRoster(myRoster, giveIds, setGiveIds)}
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold mb-2">You get ({getIds.size})</h3>
+              {renderRoster(otherRoster, getIds, setGetIds)}
+            </div>
+          </div>
+
+          <button
+            onClick={handlePropose}
+            disabled={proposing || (giveIds.size === 0 && getIds.size === 0)}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50"
+          >
+            {proposing ? 'Proposing...' : 'Propose Trade'}
+          </button>
+
+          {result && (
+            <p className={`text-sm mt-3 ${result.accepted ? 'text-green-600' : 'text-red-600'}`}>
+              {result.accepted ? 'Accepted: ' : 'Rejected: '}
+              {result.reason}
+            </p>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -261,7 +398,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advancing, setAdvancing] = useState(false)
-  const [tab, setTab] = useState<'league' | 'roster'>('league')
+  const [tab, setTab] = useState<'league' | 'roster' | 'trade'>('league')
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -391,9 +528,20 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
                 My Roster
               </button>
             )}
+            {league.userTeamId != null && (
+              <button
+                onClick={() => setTab('trade')}
+                className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+                  tab === 'trade' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+                }`}
+              >
+                Trade
+              </button>
+            )}
           </div>
 
           {tab === 'roster' && league.userTeamId != null && <RosterView teamId={league.userTeamId} />}
+          {tab === 'trade' && league.userTeamId != null && <TradeView userTeamId={league.userTeamId} />}
 
           {tab === 'league' && (
             <>
