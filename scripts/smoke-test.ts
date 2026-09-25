@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { db } from '../src/db'
-import { createLeague, deleteLeague, simWeek } from '../src/engine/league'
+import { advanceToNextSeason, createLeague, deleteLeague, simWeek } from '../src/engine/league'
 
 async function main() {
   const leagueId = await createLeague('Smoke Test League', 42)
@@ -30,6 +30,45 @@ async function main() {
   if (league.champTeamId == null) throw new Error('No champion set')
 
   console.log('OK: smoke test passed')
+
+  const rosterCountBefore = await db.players.count()
+  const offseasonResult = await advanceToNextSeason(leagueId)
+  const rosterCountAfter = await db.players.count()
+  const leagueAfterOffseason = await db.leagues.get(leagueId)
+
+  console.log('offseason:', offseasonResult)
+  console.log('roster count before/after:', rosterCountBefore, rosterCountAfter)
+  console.log('season after offseason:', leagueAfterOffseason?.season, leagueAfterOffseason?.phase)
+
+  if (leagueAfterOffseason?.phase !== 'regular' || leagueAfterOffseason.week !== 1) {
+    throw new Error('League did not roll into a fresh regular season')
+  }
+  if (leagueAfterOffseason.season !== (league.season ?? 0) + 1) {
+    throw new Error('Season number did not increment')
+  }
+  if (rosterCountAfter !== rosterCountBefore - offseasonResult.retiredCount + offseasonResult.draftedCount) {
+    throw new Error('Roster count after offseason does not reconcile with retirements/draft picks')
+  }
+
+  // Play out the second season to make sure schedules/standings don't collide across seasons.
+  for (let i = 0; i < 12; i++) {
+    const league2 = await db.leagues.get(leagueId)
+    if (!league2 || league2.phase === 'complete') break
+    await simWeek(leagueId)
+  }
+  const league2 = await db.leagues.get(leagueId)
+  const season2Games = await db.games
+    .where('leagueId')
+    .equals(leagueId)
+    .and((g) => g.season === leagueAfterOffseason.season && g.round === undefined)
+    .toArray()
+
+  console.log('season 2 phase:', league2?.phase, 'season 2 regular games:', season2Games.length)
+
+  if (league2?.phase !== 'complete') throw new Error('Second season did not complete')
+  if (season2Games.length !== 28) throw new Error('Second season game count is wrong (season scoping bug)')
+
+  console.log('OK: multi-season smoke test passed')
 
   await deleteLeague(leagueId)
   const remainingLeagues = await db.leagues.count()

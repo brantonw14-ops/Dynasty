@@ -1,7 +1,13 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useState } from 'react'
 import { db } from './db'
-import { createLeague, deleteLeague, regularSeasonWeeks, simWeek } from './engine/league'
+import {
+  advanceToNextSeason,
+  createLeague,
+  deleteLeague,
+  regularSeasonWeeks,
+  simWeek,
+} from './engine/league'
 import { computeStandings } from './engine/standings'
 import type { LeaguePhase } from './types'
 
@@ -17,6 +23,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const games = useLiveQuery(() => db.games.where({ leagueId }).toArray(), [leagueId])
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [advancing, setAdvancing] = useState(false)
 
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
@@ -29,6 +36,15 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
       await simWeek(leagueId)
     } finally {
       setSimming(false)
+    }
+  }
+
+  const handleAdvanceSeason = async () => {
+    setAdvancing(true)
+    try {
+      await advanceToNextSeason(leagueId)
+    } finally {
+      setAdvancing(false)
     }
   }
 
@@ -47,9 +63,10 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
 
   if (!league || !teams || !games) return <p className="p-8">Loading league...</p>
 
-  const regularGames = games.filter((g) => g.round === undefined)
-  const semiGames = games.filter((g) => g.round === 'semifinal')
-  const finalGame = games.find((g) => g.round === 'final')
+  const seasonGames = games.filter((g) => g.season === league.season)
+  const regularGames = seasonGames.filter((g) => g.round === undefined)
+  const semiGames = seasonGames.filter((g) => g.round === 'semifinal')
+  const finalGame = seasonGames.find((g) => g.round === 'final')
   const standings = computeStandings(teams, regularGames)
   const totalWeeks = regularSeasonWeeks(teams.length)
 
@@ -68,15 +85,25 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleSimWeek}
-            disabled={simming || league.phase === 'complete'}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50"
-          >
-            {simming
-              ? 'Simming...'
-              : simButtonLabel(league.phase, league.week, semiGames.length > 0)}
-          </button>
+          {league.phase === 'complete' ? (
+            <button
+              onClick={handleAdvanceSeason}
+              disabled={advancing}
+              className="px-4 py-2 bg-green-600 text-white rounded-md disabled:opacity-50"
+            >
+              {advancing ? 'Advancing...' : `Advance to ${league.season + 1} Season`}
+            </button>
+          ) : (
+            <button
+              onClick={handleSimWeek}
+              disabled={simming}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50"
+            >
+              {simming
+                ? 'Simming...'
+                : simButtonLabel(league.phase, league.week, semiGames.length > 0)}
+            </button>
+          )}
           <button
             onClick={handleReset}
             disabled={resetting}

@@ -1,7 +1,9 @@
 import { db } from '../db'
 import type { Player } from '../types'
+import { runDraft } from './draft'
 import { simGame } from './gameSim'
-import { generatePlayer } from './players'
+import { generateRosterForTeam } from './players'
+import { ageAndRetire } from './retirement'
 import { createRng } from './rng'
 import { generateSchedule, type ScheduledGame } from './schedule'
 import { computeStandings } from './standings'
@@ -28,27 +30,20 @@ export async function createLeague(name: string, seed = Date.now()) {
   }
 
   for (const teamId of teamIds) {
-    const roster: Player[] = []
-    const positions: Array<Player['position']> = [
-      'QB', 'QB', 'QB', 'RB', 'RB', 'RB', 'RB', 'WR', 'WR', 'WR', 'WR', 'WR', 'WR',
-      'TE', 'TE', 'TE', 'OL', 'OL', 'OL', 'OL', 'OL', 'OL', 'OL', 'OL', 'OL',
-      'DL', 'DL', 'DL', 'DL', 'DL', 'DL', 'DL', 'DL', 'LB', 'LB', 'LB', 'LB', 'LB', 'LB', 'LB',
-      'CB', 'CB', 'CB', 'CB', 'CB', 'CB', 'S', 'S', 'S', 'S', 'K', 'P',
-    ]
-    for (const pos of positions) {
-      const p = generatePlayer(rng, pos, teamId)
-      roster.push(p as Player)
-    }
+    const roster = generateRosterForTeam(rng, teamId)
     await db.players.bulkAdd(roster as never[])
   }
 
-  const schedule: ScheduledGame[] = generateSchedule(teamIds)
-  const season = new Date().getFullYear()
-  await db.schedule.bulkAdd(
-    schedule.map((g) => ({ leagueId: leagueId as number, season, ...g })) as never[],
-  )
+  await generateAndStoreSchedule(leagueId as number, teamIds, new Date().getFullYear())
 
   return leagueId as number
+}
+
+async function generateAndStoreSchedule(leagueId: number, teamIds: number[], season: number) {
+  const schedule: ScheduledGame[] = generateSchedule(teamIds)
+  await db.schedule.bulkAdd(
+    schedule.map((g) => ({ leagueId, season, ...g })) as never[],
+  )
 }
 
 export async function deleteLeague(leagueId: number) {
@@ -70,7 +65,9 @@ async function simRegularSeasonWeek(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
 
-  const weekGames = await db.schedule.where({ leagueId, week: league.week }).toArray()
+  const weekGames = await db.schedule
+    .where({ leagueId, season: league.season, week: league.week })
+    .toArray()
   const rng = createRng(league.season * 1000 + league.week)
 
   for (const g of weekGames) {
@@ -97,6 +94,14 @@ async function simRegularSeasonWeek(leagueId: number) {
   })
 }
 
+async function currentSeasonRegularGames(leagueId: number, season: number) {
+  return db.games
+    .where('leagueId')
+    .equals(leagueId)
+    .and((g) => g.season === season && g.round === undefined)
+    .toArray()
+}
+
 async function simPlayoffRound(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
@@ -104,15 +109,19 @@ async function simPlayoffRound(leagueId: number) {
   const teams = await db.teams.toArray()
   const rng = createRng(league.season * 1000 + 900 + league.week)
 
-  const semis = await db.games.where({ leagueId, round: 'semifinal' }).toArray()
-  const final = await db.games.where({ leagueId, round: 'final' }).toArray()
+  const semis = await db.games
+    .where('leagueId')
+    .equals(leagueId)
+    .and((g) => g.season === league.season && g.round === 'semifinal')
+    .toArray()
+  const final = await db.games
+    .where('leagueId')
+    .equals(leagueId)
+    .and((g) => g.season === league.season && g.round === 'final')
+    .toArray()
 
   if (semis.length === 0) {
-    const regularGames = await db.games
-      .where('leagueId')
-      .equals(leagueId)
-      .and((g) => g.round === undefined)
-      .toArray()
+    const regularGames = await currentSeasonRegularGames(leagueId, league.season)
     const standings = computeStandings(teams, regularGames)
     const [s1, s2, s3, s4] = standings
 
@@ -174,4 +183,56 @@ export async function simWeek(leagueId: number) {
   } else if (league.phase === 'playoffs') {
     await simPlayoffRound(leagueId)
   }
+}
+
+/**
+ * Offseason: ages every player a year (with retirements), then runs a
+ * worst-record-picks-first draft to refill each team back to a full roster,
+ * and rolls the league into a fresh regular season.
+ */
+export async function advanceToNextSeason(leagueId: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) throw new Error('League not found')
+  if (league.phase !== 'complete') throw new Error('Season is not finished yet')
+
+  const rng = createRng(league.season * 7919 + 1)
+  const teams = await db.teams.toArray()
+  const allPlayers = await db.players.toArray()
+
+  const { retiredIds, agedPlayers } = ageAndRetire(rng, allPlayers)
+  if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
+  await db.players.bulkPut(agedPlayers as never[])
+
+  const rostersByTeam = new Map<number, Player[]>()
+  for (const team of teams) {
+    rostersByTeam.set(
+      team.id,
+      agedPlayers.filter((p) => p.teamId === team.id),
+    )
+  }
+
+  const regularGames = await currentSeasonRegularGames(leagueId, league.season)
+  const standings = computeStandings(teams, regularGames)
+  const draftOrderTeamIds = [...standings].reverse().map((s) => s.teamId)
+
+  const picks = runDraft(rng, teams, rostersByTeam, draftOrderTeamIds)
+  if (picks.length > 0) {
+    await db.players.bulkAdd(picks.map((p) => p.player) as never[])
+  }
+
+  const nextSeason = league.season + 1
+  await generateAndStoreSchedule(
+    leagueId,
+    teams.map((t) => t.id),
+    nextSeason,
+  )
+
+  await db.leagues.update(leagueId, {
+    season: nextSeason,
+    week: 1,
+    phase: 'regular',
+    champTeamId: null,
+  })
+
+  return { retiredCount: retiredIds.length, draftedCount: picks.length }
 }
