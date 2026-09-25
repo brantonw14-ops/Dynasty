@@ -29,16 +29,23 @@ async function assertSeasonSane(leagueId: number, season: number) {
     `divisional=${divisional.length} conference=${conference.length} superbowl=${superbowl.length}`)
 
   const gamesPerTeam = new Map<number, number>()
+  const gamesPerWeek = new Map<number, number>()
   for (const g of regular) {
     gamesPerTeam.set(g.homeTeamId, (gamesPerTeam.get(g.homeTeamId) ?? 0) + 1)
     gamesPerTeam.set(g.awayTeamId, (gamesPerTeam.get(g.awayTeamId) ?? 0) + 1)
+    gamesPerWeek.set(g.week, (gamesPerWeek.get(g.week) ?? 0) + 1)
   }
   if (gamesPerTeam.size !== teams.length) {
     throw new Error(`Expected all ${teams.length} teams to have regular season games`)
   }
   for (const [teamId, count] of gamesPerTeam) {
-    if (count < 15 || count > 19) {
-      throw new Error(`Team ${teamId} played ${count} regular season games (expected ~17)`)
+    if (count !== 17) {
+      throw new Error(`Team ${teamId} played ${count} regular season games (expected exactly 17)`)
+    }
+  }
+  for (const [week, count] of gamesPerWeek) {
+    if (count < 14) {
+      throw new Error(`Week ${week} only had ${count} games - a straggling/thin week (expected >=14)`)
     }
   }
 
