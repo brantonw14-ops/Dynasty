@@ -537,22 +537,43 @@ async function main() {
     // Suggested trades: whatever comes back must actually be a deal the AI
     // side would take (evaluateTrade-accepted) and must fit the user's cap.
     const suggestions = await findSuggestedTrades(leagueId, 5)
-    console.log(`suggested trades: ${suggestions.length} candidate(s)`)
+    console.log(`suggested trades: ${suggestions.length} candidate(s), ${suggestions.filter((s) => s.givePicks.length > 0).length} with a pick sweetener`)
     const usedGiveIds = new Set<number>()
+    const usedPickKeys = new Set<string>()
     let checked = 0
     for (const s of suggestions) {
       if (s.giveIds.length === 0 || s.getIds.length === 0) throw new Error('Suggested trade has an empty side')
-      // A player already traded away by an earlier suggestion this loop
+      // A player/pick already traded away by an earlier suggestion this loop
       // isn't a fresh failure of the feature - skip instead of asserting.
       if (s.giveIds.some((id) => usedGiveIds.has(id))) continue
-      const outcome = await proposeTrade(leagueId, (await db.leagues.get(leagueId))!.userTeamId!, s.otherTeamId, s.giveIds, s.getIds)
+      const pickKeys = s.givePicks.map((r) => `${r.year}-${r.round}-${r.originalTeamId}`)
+      if (pickKeys.some((k) => usedPickKeys.has(k))) continue
+      const outcome = await proposeTrade(
+        leagueId,
+        (await db.leagues.get(leagueId))!.userTeamId!,
+        s.otherTeamId,
+        s.giveIds,
+        s.getIds,
+        s.givePicks,
+      )
       if (!outcome.accepted) {
         throw new Error(`Suggested trade was not actually acceptable when proposed: ${outcome.reason}`)
       }
       s.giveIds.forEach((id) => usedGiveIds.add(id))
+      pickKeys.forEach((k) => usedPickKeys.add(k))
       checked++
     }
     console.log(`OK: findSuggestedTrades only returns deals the AI side actually accepts (${checked} executed)`)
+
+    // Refreshing (a different seed) should be able to surface a different
+    // slice of the league - not asserted strictly (small leagues can
+    // legitimately converge on the same best options), just sanity-checked
+    // that it runs cleanly and returns a well-formed list.
+    const refreshed = await findSuggestedTrades(leagueId, 5, 12345)
+    for (const s of refreshed) {
+      if (s.giveIds.length === 0 || s.getIds.length === 0) throw new Error('Refreshed suggestion has an empty side')
+    }
+    console.log(`OK: findSuggestedTrades with a different seed returns ${refreshed.length} well-formed candidate(s)`)
   })()
 
   await playSeason(leagueId)

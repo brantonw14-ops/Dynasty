@@ -1282,6 +1282,7 @@ export interface SuggestedTrade {
   get: SuggestedTradePlayer
   giveIds: number[]
   getIds: number[]
+  givePicks: TradePickRef[]
   reason: string
 }
 
@@ -1306,13 +1307,22 @@ function toSuggestedTradePlayer(p: Player): SuggestedTradePlayer {
  * surface as a one-click "Make this trade" list, not something the user has
  * to hunt for manually. Capped at a couple of suggestions per opposing team
  * so the list reads as offers from across the league, not just whichever
- * team happens to come first with a deep bench.
+ * team happens to come first with a deep bench. When a plain player-for-
+ * player swap isn't quite enough for the AI side, sweetens it with one of
+ * the user's own cheapest-value owned future picks before giving up on that
+ * pairing - same escape hatch a real GM reaches for.
+ *
+ * `seed` shuffles which teams/candidates get looked at first, so calling
+ * this again with a different seed (a "refresh" in the UI) surfaces a
+ * different slice of the league instead of the exact same list every time.
  */
-export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<SuggestedTrade[]> {
+export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0): Promise<SuggestedTrade[]> {
   const league = await db.leagues.get(leagueId)
   if (!league || league.userTeamId == null) return []
 
-  const teams = await db.teams.toArray()
+  const rng = createRng(seed + 1)
+  const teams = shuffle(await db.teams.toArray(), rng)
+  const allTeamIds = teams.map((t) => t.id)
   const myRoster = await db.players.where('teamId').equals(league.userTeamId).toArray()
   const myNeeds = new Set(rosterNeeds(myRoster))
   const myByPosition = new Map<Position, Player[]>()
@@ -1321,6 +1331,9 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
     list.push(p)
     myByPosition.set(p.position, list)
   }
+  const myPicks = [...ownedPicks(league.tradedPicks, league.season, allTeamIds, league.userTeamId, 5)].sort(
+    (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
+  )
 
   const maxPerTeam = 2
   const suggestions: SuggestedTrade[] = []
@@ -1332,12 +1345,18 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
     const theirNeeds = new Set(rosterNeeds(theirRoster))
     let addedForTeam = 0
 
-    const theirCandidates = [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15)
+    const theirCandidates = shuffle(
+      [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15),
+      rng,
+    )
     for (const theirs of theirCandidates) {
       if (suggestions.length >= limit || addedForTeam >= maxPerTeam) break
       const myBest = (myByPosition.get(theirs.position) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
       const wouldUpgrade = myNeeds.has(theirs.position) || !myBest || theirs.ratings.overall > myBest.ratings.overall + 4
       if (!wouldUpgrade) continue
+      // Skip deals the AI would take but that would leave them thin at a
+      // position they actually need - not realistic even if "fair" by value.
+      if (theirNeeds.has(theirs.position)) continue
 
       // Offer from my own surplus - positions I'm not short on, cheapest
       // players first so the ask stays modest - skipping anything I'd need
@@ -1347,12 +1366,30 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
         .sort((a, b) => playerValue(a) - playerValue(b))
 
       for (const give of mySurplus) {
-        const evaluation = evaluateTrade(theirRoster, [theirs], [give])
-        if (!evaluation.accepted) continue
         if (!wouldFitUnderCap(myRoster, [give.id], [theirs])) continue
-        // Skip deals the AI would take but that would leave them thin at a
-        // position they actually need - not realistic even if "fair" by value.
-        if (theirNeeds.has(theirs.position)) continue
+
+        const plain = evaluateTrade(theirRoster, [theirs], [give])
+        let givePicks: TradePickRef[] = []
+        let accepted = plain.accepted
+
+        if (!accepted) {
+          // Try sweetening with owned picks, cheapest-value first, adding
+          // one more at a time until the AI side would actually take it.
+          let sweetenerValue = 0
+          for (const pick of myPicks) {
+            if (givePicks.some((p) => p.year === pick.year && p.round === pick.round)) continue
+            sweetenerValue += pickValue(pick.round, pick.year - league.season)
+            givePicks = [...givePicks, pick]
+            if (evaluateTrade(theirRoster, [theirs], [give], 0, sweetenerValue).accepted) {
+              accepted = true
+              break
+            }
+            if (givePicks.length >= 2) break // don't sweeten with more than 2 picks
+          }
+          if (!accepted) givePicks = []
+        }
+
+        if (!accepted) continue
 
         suggestions.push({
           otherTeamId: team.id,
@@ -1360,9 +1397,14 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
           get: toSuggestedTradePlayer(theirs),
           giveIds: [give.id],
           getIds: [theirs.id],
-          reason: myNeeds.has(theirs.position)
-            ? `Fills your need at ${theirs.position}`
-            : `Upgrade at ${theirs.position} (${theirs.ratings.overall} OVR vs your ${myBest?.ratings.overall ?? 0})`,
+          givePicks,
+          reason:
+            (myNeeds.has(theirs.position)
+              ? `Fills your need at ${theirs.position}`
+              : `Upgrade at ${theirs.position} (${theirs.ratings.overall} OVR vs your ${myBest?.ratings.overall ?? 0})`) +
+            (givePicks.length > 0
+              ? ` · needs ${givePicks.length > 1 ? 'picks' : 'a pick'} added to close the gap`
+              : ''),
         })
         addedForTeam++
         break
@@ -1371,6 +1413,16 @@ export async function findSuggestedTrades(leagueId: number, limit = 5): Promise<
   }
 
   return suggestions
+}
+
+/** Deterministic Fisher-Yates shuffle - used to vary which teams/candidates findSuggestedTrades looks at on a "refresh". */
+function shuffle<T>(items: T[], rng: () => number): T[] {
+  const arr = [...items]
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+  }
+  return arr
 }
 
 export interface SeasonHistoryEntry {

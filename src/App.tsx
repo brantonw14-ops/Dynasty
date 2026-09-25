@@ -1079,8 +1079,12 @@ function TradeView({
   const [respondingOfferId, setRespondingOfferId] = useState<number | null>(null)
   const [makingSuggestionKey, setMakingSuggestionKey] = useState<string | null>(null)
   const [suggestionResult, setSuggestionResult] = useState<{ key: string; accepted: boolean; reason: string } | null>(null)
+  const [suggestionSeed, setSuggestionSeed] = useState(0)
 
-  const suggestedTrades = useLiveQuery(() => findSuggestedTrades(leagueId), [leagueId, myRoster])
+  const suggestedTrades = useLiveQuery(
+    () => findSuggestedTrades(leagueId, 5, suggestionSeed),
+    [leagueId, myRoster, suggestionSeed],
+  )
 
   const otherRoster = useLiveQuery(
     (): Promise<Player[]> =>
@@ -1164,7 +1168,7 @@ function TradeView({
     setMakingSuggestionKey(key)
     setSuggestionResult(null)
     try {
-      const outcome = await proposeTrade(leagueId, userTeamId, s.otherTeamId, s.giveIds, s.getIds)
+      const outcome = await proposeTrade(leagueId, userTeamId, s.otherTeamId, s.giveIds, s.getIds, s.givePicks)
       setSuggestionResult({ key, accepted: outcome.accepted, reason: outcome.reason })
     } finally {
       setMakingSuggestionKey(null)
@@ -1289,14 +1293,28 @@ function TradeView({
 
   return (
     <div>
-      {suggestedTrades && suggestedTrades.length > 0 && (
+      {suggestedTrades && (
         <div className="mb-6 border border-emerald-800 rounded p-3 bg-emerald-950/30">
-          <h3 className="text-sm font-semibold text-emerald-300 mb-2">
-            Suggested Trades for You ({suggestedTrades.length})
-          </h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-emerald-300">
+              Suggested Trades for You ({suggestedTrades.length})
+            </h3>
+            <button
+              onClick={() => {
+                setSuggestionSeed((n) => n + 1)
+                setSuggestionResult(null)
+              }}
+              className="px-2 py-1 border border-emerald-700 text-emerald-300 rounded text-[11px] hover:bg-emerald-900/50"
+            >
+              Refresh Trades
+            </button>
+          </div>
+          {suggestedTrades.length === 0 && (
+            <p className="text-xs text-gray-500">No fresh suggestions right now - try refreshing or check back after a few weeks.</p>
+          )}
           <div className="flex flex-col gap-2">
             {suggestedTrades.map((s) => {
-              const key = `${s.otherTeamId}-${s.giveIds[0]}-${s.getIds[0]}`
+              const key = `${s.otherTeamId}-${s.giveIds[0]}-${s.getIds[0]}-${s.givePicks.map(pickRefKey).join(',')}`
               const netSalary = s.get.salary - s.give.salary
               return (
                 <div key={key} className="border-b border-emerald-900 pb-2 last:border-0 last:pb-0">
@@ -1333,6 +1351,19 @@ function TradeView({
                           <span className="text-gray-400 whitespace-nowrap">{formatMoney(s.give.salary)}</span>
                         </span>
                       </div>
+                      {s.givePicks.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {s.givePicks.map((r) => (
+                            <span
+                              key={pickRefKey(r)}
+                              className="px-1.5 py-0.5 rounded border border-blue-700 bg-blue-900/40 text-blue-200 text-[10px]"
+                              title={pickLabel(r, userTeamId, abbrev)}
+                            >
+                              + {r.year} R{r.round}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="bg-black/20 rounded px-2 py-1.5">
                       <div className="text-gray-500 mb-0.5">You get</div>
