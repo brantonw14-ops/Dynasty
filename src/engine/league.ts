@@ -1456,22 +1456,39 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
 
   const maxPerTeam = 2
   const suggestions: SuggestedTrade[] = []
-  for (const team of teams) {
-    if (team.id === league.userTeamId) continue
-    if (suggestions.length >= limit) break
+  const otherTeams = teams.filter((t) => t.id !== league.userTeamId)
 
+  interface TeamState {
+    theirRoster: Player[]
+    theirNeeds: Set<Position>
+    theirCandidates: Player[]
+    usedTheirIds: Set<number>
+    added: number
+  }
+  const teamState = new Map<number, TeamState>()
+
+  const getState = async (team: { id: number }): Promise<TeamState> => {
+    const existing = teamState.get(team.id)
+    if (existing) return existing
     const theirRoster = await db.players.where('teamId').equals(team.id).toArray()
-    const theirNeeds = new Set(rosterNeeds(theirRoster))
-    let addedForTeam = 0
+    const state: TeamState = {
+      theirRoster,
+      theirNeeds: new Set(rosterNeeds(theirRoster)),
+      theirCandidates: shuffle([...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15), rng),
+      usedTheirIds: new Set<number>(),
+      added: 0,
+    }
+    teamState.set(team.id, state)
+    return state
+  }
 
-    const theirCandidates = shuffle(
-      [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15),
-      rng,
-    )
-    const usedTheirIds = new Set<number>()
-
+  // Finds at most one more suggestion for this team. Called in a round-robin
+  // across teams (below) rather than exhausted per-team in one go, so the
+  // list reads as offers from across the league - a team that happens to
+  // match easily doesn't crowd out every other team's one good deal.
+  const tryOneForTeam = (team: { id: number }, state: TeamState): boolean => {
+    const { theirRoster, theirNeeds, theirCandidates, usedTheirIds } = state
     for (const theirs of theirCandidates) {
-      if (suggestions.length >= limit || addedForTeam >= maxPerTeam) break
       if (usedTheirIds.has(theirs.id)) continue
       if (!wouldUpgradeMe(theirs)) continue
       // Skip deals the AI would take but that would leave them thin at a
@@ -1534,7 +1551,18 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
       result.give.forEach((p) => usedGiveIds.add(p.id))
       result.picks.forEach((r) => usedPickKeys.add(pickKey(r)))
       getSet.forEach((p) => usedTheirIds.add(p.id))
-      addedForTeam++
+      state.added++
+      return true
+    }
+    return false
+  }
+
+  for (let round = 0; round < maxPerTeam && suggestions.length < limit; round++) {
+    for (const team of otherTeams) {
+      if (suggestions.length >= limit) break
+      const state = await getState(team)
+      if (state.added > round) continue // already has this round's suggestion from an earlier pass
+      tryOneForTeam(team, state)
     }
   }
 
