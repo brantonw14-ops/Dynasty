@@ -949,31 +949,16 @@ async function main() {
 
   const rosterCountBeforeDraft = await db.players.count()
 
-  // beginDraft must refuse to start the season with an illegal (<53) active
-  // roster - confirm the guard actually fires, then use autoFillRoster (the
-  // in-app escape hatch) to legally top it off and confirm it does.
-  const userRosterPreFill = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
-  if (userRosterPreFill.length >= MIN_ROSTER_SIZE) {
+  // beginDraft must NOT gate on roster size - the draft itself adds up to
+  // DRAFT_ROUNDS rookies, so being under 53 going in is completely normal.
+  // Confirm it succeeds even though the user roster is under 53 right now.
+  const userRosterPreDraft = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
+  if (userRosterPreDraft.length >= MIN_ROSTER_SIZE) {
     throw new Error('Expected the user roster to be under 53 at this point in the smoke test setup')
   }
-  let threwForShortRoster = false
-  try {
-    await beginDraft(leagueId)
-  } catch {
-    threwForShortRoster = true
-  }
-  if (!threwForShortRoster) throw new Error('beginDraft should reject a sub-53-man roster')
-  console.log(`OK: beginDraft rejects a ${userRosterPreFill.length}-man roster (below the ${MIN_ROSTER_SIZE}-man minimum)`)
-
-  const { added } = await autoFillRoster(leagueId)
-  const userRosterPostFill = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
-  if (userRosterPostFill.length < MIN_ROSTER_SIZE) {
-    throw new Error(`autoFillRoster only reached ${userRosterPostFill.length}/${MIN_ROSTER_SIZE} players (added ${added})`)
-  }
-  console.log(`OK: autoFillRoster topped the user roster up to ${userRosterPostFill.length}/${MIN_ROSTER_SIZE} players`)
-
-  const userIdsBeforeDraft = new Set(userRosterPostFill.map((p) => p.id))
+  const userIdsBeforeDraft = new Set(userRosterPreDraft.map((p) => p.id))
   await beginDraft(leagueId)
+  console.log(`OK: beginDraft succeeds with a ${userRosterPreDraft.length}-man roster (under the ${MIN_ROSTER_SIZE}-man minimum) - the draft still has to add its rookies`)
 
   // Drive the interactive draft to completion: whenever it's the user's
   // turn, pick the best available prospect at a position they need; AI
@@ -1083,6 +1068,34 @@ async function main() {
   if (rosterCountAfter <= rosterCountBeforeDraft) {
     throw new Error('Roster count did not grow from draft picks')
   }
+
+  // The real gate is here: week 1 of the regular season, after the draft's
+  // rookies have already landed. If the draft (plus whatever was signed/cut
+  // along the way) didn't reach a legal 53-man roster, simWeek must refuse
+  // to kick the season off - then autoFillRoster is the escape hatch, and
+  // simWeek should succeed once it's topped up.
+  const userRosterPostDraft = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
+  if (userRosterPostDraft.length < MIN_ROSTER_SIZE) {
+    let threwForShortRoster = false
+    try {
+      await simWeek(leagueId)
+    } catch {
+      threwForShortRoster = true
+    }
+    if (!threwForShortRoster) throw new Error('simWeek should refuse to kick off week 1 with a sub-53-man roster')
+    console.log(`OK: simWeek rejects kicking off week 1 with a ${userRosterPostDraft.length}-man roster (post-draft, below the ${MIN_ROSTER_SIZE}-man minimum)`)
+
+    const { added } = await autoFillRoster(leagueId)
+    const userRosterFilled = await db.players.where('teamId').equals(leagueInFA.userTeamId).toArray()
+    if (userRosterFilled.length < MIN_ROSTER_SIZE) {
+      throw new Error(`autoFillRoster only reached ${userRosterFilled.length}/${MIN_ROSTER_SIZE} players (added ${added})`)
+    }
+    console.log(`OK: autoFillRoster topped the post-draft roster up to ${userRosterFilled.length}/${MIN_ROSTER_SIZE} players`)
+  } else {
+    console.log(`OK: draft alone already reached a legal ${userRosterPostDraft.length}-man roster - no kickoff guard to trigger this run`)
+  }
+  await simWeek(leagueId) // week 1 - must succeed now that the roster is legal
+  console.log('OK: simWeek kicks off week 1 successfully once the roster is legal')
 
   // Mid-season roster moves: sim a few weeks in, cut a bench player off the
   // user's own team, and confirm they land back in the free agent pool and

@@ -444,9 +444,33 @@ async function simPlayoffRound(leagueId: number) {
   }
 }
 
+/**
+ * A real NFL team can't take the field short-handed - this is the one
+ * point that actually blocks play: the start of a fresh regular season,
+ * once the draft (and its up-to-7 new rookies) has already landed. Roster
+ * moves are otherwise completely free-form the rest of the year - there's
+ * no maximum, and a mid-season dip below 53 while shopping for a
+ * replacement is fine.
+ */
+export async function checkRosterLegalForKickoff(leagueId: number): Promise<{ ok: true } | { ok: false; rosterSize: number }> {
+  const league = await db.leagues.get(leagueId)
+  if (!league || league.userTeamId == null || league.phase !== 'regular' || league.week !== 1) return { ok: true }
+  const rosterSize = await db.players.where('teamId').equals(league.userTeamId).count()
+  if (rosterSize >= MIN_ROSTER_SIZE) return { ok: true }
+  return { ok: false, rosterSize }
+}
+
 export async function simWeek(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
+
+  const rosterCheck = await checkRosterLegalForKickoff(leagueId)
+  if (!rosterCheck.ok) {
+    throw new Error(
+      `Your roster has only ${rosterCheck.rosterSize} players - you need at least ${MIN_ROSTER_SIZE} to kick off the season. ` +
+        `Sign more free agents, use Auto-Fill Roster, or if you're short on cap space, cut an expensive player to afford a couple of cheaper ones.`,
+    )
+  }
 
   // Heal existing injuries by a week before this week's games roll any new
   // ones, so a player hurt this week doesn't also get a week knocked off
@@ -751,14 +775,10 @@ export async function beginDraft(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) throw new Error('League not found')
   if (league.phase !== 'freeagency') throw new Error('Not in the free agency window')
-  if (league.userTeamId != null) {
-    const rosterSize = await db.players.where('teamId').equals(league.userTeamId).count()
-    if (rosterSize < MIN_ROSTER_SIZE) {
-      throw new Error(
-        `Your roster has only ${rosterSize} players - you need at least ${MIN_ROSTER_SIZE} to start the season. Sign more free agents or use Auto-Fill Roster.`,
-      )
-    }
-  }
+  // No roster-size gate here on purpose: the draft itself adds up to 7
+  // players (one per round), so a team a handful of players short of 53
+  // going in is completely normal and expected - the real check is after
+  // the draft, once those rookies have actually landed on the roster.
 
   const rng = createRng(league.season * 7919 + 2)
   const teams = await db.teams.toArray()

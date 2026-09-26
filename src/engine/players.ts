@@ -7,9 +7,11 @@ import { marketSalary } from './salary'
 
 const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'OL', 'DL', 'LB', 'CB', 'S', 'K', 'P']
 
-// Roughly how many of each position a 53-man roster carries.
+// Roughly how many of each position a 53-man roster carries (sums to
+// exactly 53 - real rosters often run a bit deeper at OL than skill
+// positions, so that's where the extra spot over a round-number split goes).
 export const ROSTER_SHAPE: Record<Position, number> = {
-  QB: 3, RB: 4, WR: 6, TE: 3, OL: 9, DL: 8, LB: 7, CB: 6, S: 4, K: 1, P: 1,
+  QB: 3, RB: 4, WR: 6, TE: 3, OL: 10, DL: 8, LB: 7, CB: 6, S: 4, K: 1, P: 1,
 }
 
 /** A real NFL team must carry a 53-man active roster to start the season. */

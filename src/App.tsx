@@ -9,6 +9,7 @@ import {
   createLeague,
   cutPlayer,
   deleteLeague,
+  DRAFT_ROUNDS,
   estimateFreeAgentAsk,
   findSuggestedTrades,
   getDraftBoard,
@@ -2149,6 +2150,10 @@ function FreeAgencyView({
   const needs = rosterNeeds(roster)
   const capSpace = computeCapSpace(roster)
   const rosterShort = MIN_ROSTER_SIZE - roster.length
+  // The draft itself adds up to DRAFT_ROUNDS (7) rookies, one per round, so
+  // being up to 7 short here is completely normal - only warn when even a
+  // full draft class wouldn't be enough to reach a legal 53-man roster.
+  const shortEvenAfterDraft = showDraftButton ? rosterShort - DRAFT_ROUNDS : rosterShort
 
   const filtered = positionFilter ? freeAgents.filter((p) => p.position === positionFilter) : freeAgents
   const sorted = sortRows(
@@ -2210,7 +2215,7 @@ function FreeAgencyView({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <p className="text-sm text-gray-500">
           Roster{' '}
-          <span className={rosterShort > 0 ? 'text-orange-400 font-semibold' : 'text-emerald-400 font-semibold'}>
+          <span className={shortEvenAfterDraft > 0 ? 'text-orange-400 font-semibold' : 'text-emerald-400 font-semibold'}>
             {roster.length}/{MIN_ROSTER_SIZE}
           </span>{' '}
           &middot; <InfoTip label="Cap space" tip="How much salary you can still add before hitting the league salary cap." />{' '}
@@ -2240,11 +2245,20 @@ function FreeAgencyView({
         </div>
       </div>
 
-      {rosterShort > 0 && (
+      {shortEvenAfterDraft > 0 ? (
         <p className="text-sm text-orange-400 mb-3">
-          You need at least {MIN_ROSTER_SIZE} players to start the season - {rosterShort} short. Sign free agents
-          below or use Auto-Fill Roster.
+          You'll need at least {MIN_ROSTER_SIZE} players once the {DRAFT_ROUNDS}-round draft is done - even a full
+          draft class would leave you {shortEvenAfterDraft} short. Sign free agents below, use Auto-Fill Roster, or
+          if you're short on cap space, cut an expensive player to afford a couple of cheaper ones.
         </p>
+      ) : (
+        showDraftButton &&
+        rosterShort > 0 && (
+          <p className="text-xs text-gray-500 mb-3">
+            {rosterShort} under {MIN_ROSTER_SIZE} right now - no rush, the {DRAFT_ROUNDS}-round draft will add enough
+            rookies to cover it.
+          </p>
+        )
       )}
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
 
@@ -2730,9 +2744,16 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const league = useLiveQuery(() => db.leagues.get(leagueId), [leagueId])
   const teams = useLiveQuery(() => db.teams.toArray(), [])
   const games = useLiveQuery(() => db.games.where({ leagueId }).toArray(), [leagueId])
+  const userRoster = useLiveQuery(
+    (): Promise<Player[]> =>
+      league?.userTeamId != null ? db.players.where('teamId').equals(league.userTeamId).toArray() : Promise.resolve([]),
+    [league?.userTeamId],
+  )
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advancing, setAdvancing] = useState(false)
+  const [autoFilling, setAutoFilling] = useState(false)
+  const [rosterError, setRosterError] = useState<string | null>(null)
   const [tab, setTab] = useState<'league' | 'roster' | 'gamereport' | 'trade' | 'freeagents' | 'stats' | 'history'>(
     'league',
   )
@@ -2744,11 +2765,24 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   }
 
   const handleSimWeek = async () => {
+    setRosterError(null)
     setSimming(true)
     try {
       await simWeek(leagueId)
+    } catch (err) {
+      setRosterError(err instanceof Error ? err.message : String(err))
     } finally {
       setSimming(false)
+    }
+  }
+
+  const handleAutoFillKickoff = async () => {
+    setRosterError(null)
+    setAutoFilling(true)
+    try {
+      await autoFillRoster(leagueId)
+    } finally {
+      setAutoFilling(false)
     }
   }
 
@@ -2775,6 +2809,11 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   }
 
   if (!league || !teams || !games) return <p className="p-8">Loading league...</p>
+
+  const rosterShortForKickoff =
+    league.phase === 'regular' && league.week === 1 && league.userTeamId != null
+      ? Math.max(0, MIN_ROSTER_SIZE - (userRoster?.length ?? 0))
+      : 0
 
   const seasonGames = games.filter((g) => g.season === league.season)
   const regularGames = seasonGames.filter((g) => g.round === undefined)
@@ -2816,13 +2855,25 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
               {advancing ? 'Advancing...' : `Start ${league.season + 1} Offseason`}
             </button>
           ) : league.phase === 'freeagency' || league.phase === 'resign' || league.phase === 'draft' ? null : (
-            <button
-              onClick={handleSimWeek}
-              disabled={simming}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50 whitespace-nowrap"
-            >
-              {simming ? 'Simming...' : simButtonLabel(league.phase, league.week, nextPlayoffRound)}
-            </button>
+            <>
+              {rosterShortForKickoff > 0 && (
+                <button
+                  onClick={handleAutoFillKickoff}
+                  disabled={autoFilling}
+                  className="px-3 py-2 bg-orange-600 text-white rounded-md text-sm disabled:opacity-50 whitespace-nowrap"
+                >
+                  {autoFilling ? 'Signing...' : `Auto-Fill Roster (+${rosterShortForKickoff})`}
+                </button>
+              )}
+              <button
+                onClick={handleSimWeek}
+                disabled={simming || rosterShortForKickoff > 0}
+                title={rosterShortForKickoff > 0 ? `Your roster is ${rosterShortForKickoff} short of the ${MIN_ROSTER_SIZE}-man minimum` : undefined}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md disabled:opacity-50 whitespace-nowrap"
+              >
+                {simming ? 'Simming...' : simButtonLabel(league.phase, league.week, nextPlayoffRound)}
+              </button>
+            </>
           )}
           <button
             onClick={handleReset}
@@ -2862,6 +2913,20 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
         <div className="mb-6 border border-amber-700 rounded-md px-4 py-3 bg-amber-900/40 text-amber-200 text-sm font-medium">
           🏆 {teamName(league.champTeamId)} won the Super Bowl!
           {league.champTeamId === league.userTeamId && ' (that\'s you!)'}
+        </div>
+      )}
+
+      {rosterShortForKickoff > 0 && (
+        <div className="mb-6 border border-orange-700 rounded-md px-4 py-3 bg-orange-900/20 text-orange-300 text-sm">
+          Your roster is {rosterShortForKickoff} player{rosterShortForKickoff === 1 ? '' : 's'} short of the{' '}
+          {MIN_ROSTER_SIZE}-man minimum needed to kick off the season - the draft is over, so this is on you now. Sign
+          free agents on the Free Agents tab, use Auto-Fill Roster above, or if cap space is the problem, cut an
+          expensive player to afford a couple of cheaper ones.
+        </div>
+      )}
+      {rosterError && (
+        <div className="mb-6 border border-red-700 rounded-md px-4 py-3 bg-red-900/20 text-red-300 text-sm">
+          {rosterError}
         </div>
       )}
 
