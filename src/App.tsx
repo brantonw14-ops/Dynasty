@@ -680,7 +680,94 @@ function RosterView({
                 {abbrevLabel(attrLabels[2])} = {attrLabels[2]}
               </p>
             </div>
-            <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+            {/* Mobile card list - the full table's 13 columns can't fit a
+                phone screen even with horizontal scroll, so under sm this
+                shows the same data as stacked cards instead. */}
+            <div className="sm:hidden flex flex-col gap-2">
+              {players.map((p, i) => {
+                const isStarter = i < starterCount
+                return (
+                  <div key={p.id} className="border border-slate-800 rounded-md p-2 text-xs">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span
+                          className={`text-[9px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap shrink-0 ${
+                            isStarter ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-300'
+                          }`}
+                        >
+                          {isStarter ? 'STARTER' : 'BENCH'}
+                        </span>
+                        <span className="font-medium truncate">
+                          {p.firstName} {p.lastName}
+                        </span>
+                        {p.trend === 'up' && <span className="text-green-400 shrink-0">▲</span>}
+                        {p.trend === 'down' && <span className="text-red-400 shrink-0">▼</span>}
+                      </div>
+                      {editable && (
+                        <div className="flex gap-1 shrink-0">
+                          <button
+                            onClick={() => handleMove(p.id, 'up')}
+                            disabled={moving === p.id || i === 0}
+                            className="px-1.5 border rounded text-[10px] disabled:opacity-30"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            onClick={() => handleMove(p.id, 'down')}
+                            disabled={moving === p.id || i === players.length - 1}
+                            className="px-1.5 border rounded text-[10px] disabled:opacity-30"
+                          >
+                            ↓
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {(p.injury || p.onTradeBlock) && (
+                      <div className="flex gap-1.5 mb-1">
+                        {p.injury && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-900 text-red-200">
+                            {p.injury.description} · {p.injury.weeksRemaining}wk
+                          </span>
+                        )}
+                        {p.onTradeBlock && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-200">on block</span>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-gray-400">
+                      <span>Age {p.age}</span>
+                      <span>Exp {!p.experience ? 'R' : p.experience}</span>
+                      <span className={overallColor(p.ratings.overall)}>{p.ratings.overall} OVR</span>
+                      <span className="text-yellow-400">{p.ratings.potential} POT</span>
+                      <span className="whitespace-nowrap">{p.contract ? formatMoney(p.contract.salary) : '-'}</span>
+                      <span>{p.contract?.yearsLeft ?? '-'}yr left</span>
+                    </div>
+                    <div className="text-gray-600 mt-0.5">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
+                    {editable && (
+                      <div className="flex gap-2 mt-1.5">
+                        <button
+                          onClick={() => toggleTradeBlock(p.id)}
+                          className={`px-2 py-0.5 border rounded text-[10px] ${
+                            p.onTradeBlock ? 'border-blue-600 text-blue-300' : 'text-gray-500'
+                          }`}
+                        >
+                          {p.onTradeBlock ? 'Blocked' : 'Block'}
+                        </button>
+                        <button
+                          onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
+                          disabled={cuttingId === p.id}
+                          className="px-2 py-0.5 border border-red-800 text-red-400 rounded text-[10px] disabled:opacity-30"
+                        >
+                          Cut
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="hidden sm:block overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
 <table className="text-sm border-collapse data-table">
               <thead>
                 <tr className="text-left text-gray-400 border-b">
@@ -1292,8 +1379,54 @@ function TradeView({
     sort: SortState,
     setSort: (s: SortState) => void,
     showBlockToggle: boolean,
-  ) => (
-    <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+  ) => {
+    const sorted = sortRows(
+      roster,
+      sort,
+      (p, key) => {
+        if (key === 'name') return `${p.firstName} ${p.lastName}`
+        if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
+        if (key === 'salary') return p.contract?.salary ?? 0
+        return p.ratings.overall
+      },
+      (p) => p.ratings.overall,
+    )
+    return (
+      <>
+        {/* Mobile: a checkbox row per player instead of a 5-6 column table
+            that would need to be squeezed or scrolled sideways. */}
+        <div className="sm:hidden flex flex-col gap-1.5">
+          {sorted.map((p) => (
+            <label key={p.id} className="flex items-center gap-2 border border-slate-800 rounded-md p-2 text-xs">
+              <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggle(selected, setFn, p.id)} />
+              <span className="flex-1 min-w-0 truncate">
+                {p.firstName} {p.lastName} <span className="text-gray-500">({p.position})</span>
+                {p.onTradeBlock && (
+                  <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-200">on block</span>
+                )}
+              </span>
+              <span className={`shrink-0 font-semibold ${overallColor(p.ratings.overall)}`}>{p.ratings.overall}</span>
+              <span className="shrink-0 text-gray-400 whitespace-nowrap">
+                {p.contract ? formatMoney(p.contract.salary) : '-'}
+              </span>
+              {showBlockToggle && (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault()
+                    handleToggleBlock(p.id)
+                  }}
+                  className={`shrink-0 px-2 py-0.5 border rounded text-[10px] ${
+                    p.onTradeBlock ? 'border-blue-600 text-blue-300' : 'text-gray-500'
+                  }`}
+                >
+                  {p.onTradeBlock ? 'Remove' : 'Add'}
+                </button>
+              )}
+            </label>
+          ))}
+        </div>
+
+        <div className="hidden sm:block overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
 <table className="w-full min-w-[560px] text-sm border-collapse data-table">
       <thead>
         <tr className="text-left text-gray-400 border-b">
@@ -1306,17 +1439,7 @@ function TradeView({
         </tr>
       </thead>
       <tbody>
-        {sortRows(
-          roster,
-          sort,
-          (p, key) => {
-            if (key === 'name') return `${p.firstName} ${p.lastName}`
-            if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
-            if (key === 'salary') return p.contract?.salary ?? 0
-            return p.ratings.overall
-          },
-          (p) => p.ratings.overall,
-        ).map((p) => (
+        {sorted.map((p) => (
           <tr key={p.id} className="border-b">
             <td className="py-1">
               <input
@@ -1351,7 +1474,9 @@ function TradeView({
       </tbody>
     </table>
 </div>
-  )
+      </>
+    )
+  }
 
   const renderPicks = (
     picks: TradePickRef[],
