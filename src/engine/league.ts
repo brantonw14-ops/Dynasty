@@ -1294,7 +1294,11 @@ export interface SuggestedTradePlayer {
   age: number
   overall: number
   potential: number
+  attr1: number
+  attr2: number
+  attr3: number
   salary: number
+  yearsLeft: number | null
 }
 
 export interface SuggestedTrade {
@@ -1316,7 +1320,11 @@ function toSuggestedTradePlayer(p: Player): SuggestedTradePlayer {
     age: p.age,
     overall: p.ratings.overall,
     potential: p.ratings.potential,
+    attr1: p.ratings.attr1,
+    attr2: p.ratings.attr2,
+    attr3: p.ratings.attr3,
     salary: p.contract?.salary ?? 0,
+    yearsLeft: p.contract?.yearsLeft ?? null,
   }
 }
 

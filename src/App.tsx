@@ -675,33 +675,53 @@ function RosterView({
     }
   }
 
+  const capSpace = computeCapSpace(roster)
+  const injuredCount = roster.filter((p) => p.injury).length
+
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
-        <p className="text-sm text-gray-500">
-          {roster.length} players &middot; Team overall {teamOverall} &middot;{' '}
-          <InfoTip label="Cap space" tip="How much salary you can still add this season before hitting the league salary cap." />{' '}
-          <span className={computeCapSpace(roster) < 0 ? 'text-red-400 font-semibold' : ''}>
-            {formatMoney(computeCapSpace(roster))}
-          </span>
-          {roster.some((p) => p.injury) && (
-            <> &middot; {roster.filter((p) => p.injury).length} injured</>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
+        <div className="grid grid-cols-3 sm:flex sm:items-center gap-2 sm:gap-4">
+          <div className="border border-slate-800 rounded-md px-3 py-2 text-center sm:text-left">
+            <div className="text-lg font-semibold text-gray-100">{roster.length}</div>
+            <div className="text-[11px] text-gray-500">Players</div>
+          </div>
+          <div className="border border-slate-800 rounded-md px-3 py-2 text-center sm:text-left">
+            <div className={`text-lg font-semibold ${overallColor(teamOverall)}`}>{teamOverall}</div>
+            <div className="text-[11px] text-gray-500">Team overall</div>
+          </div>
+          <div className="border border-slate-800 rounded-md px-3 py-2 text-center sm:text-left">
+            <div className={`text-lg font-semibold ${capSpace < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+              {formatMoney(capSpace)}
+            </div>
+            <div className="text-[11px] text-gray-500">
+              <InfoTip label="Cap space" tip="How much salary you can still add this season before hitting the league salary cap." />
+            </div>
+          </div>
+          {injuredCount > 0 && (
+            <div className="border border-red-900 rounded-md px-3 py-2 text-center sm:text-left col-span-3 sm:col-span-1">
+              <div className="text-lg font-semibold text-red-400">{injuredCount}</div>
+              <div className="text-[11px] text-gray-500">Injured</div>
+            </div>
           )}
-          {editable && (
-            <> &middot; Use the arrows to move a player up into the starting group (green) or down to the bench (gray) - starters get the bulk of the playing time, bench players see the field far less. ▲/▼ show recent form.</>
-          )}
-        </p>
+        </div>
         {editable && (
           <button
             onClick={handleOptimize}
             disabled={optimizing}
-            className="px-3 py-1.5 border rounded-md text-xs whitespace-nowrap disabled:opacity-50"
+            className="px-3 py-1.5 border rounded-md text-xs whitespace-nowrap disabled:opacity-50 self-start sm:self-auto"
             title="Sets every position's depth chart to best overall first"
           >
             {optimizing ? 'Optimizing...' : 'Best Roster'}
           </button>
         )}
       </div>
+      {editable && (
+        <p className="text-xs text-gray-500 mb-4">
+          Use the arrows to move a player up into the starting group (green) or down to the bench (gray) - starters
+          get the bulk of the playing time, bench players see the field far less. ▲/▼ show recent form.
+        </p>
+      )}
 
       {cutError && <p className="text-sm text-red-400 mb-3">{cutError}</p>}
 
@@ -713,11 +733,11 @@ function RosterView({
         const starterCount = Math.min(STARTER_COUNTS[pos] ?? 1, players.length)
         return (
           <div key={pos} className="mb-6">
-            <div className="flex items-baseline gap-2 mb-2">
-              <h2 className="text-sm font-semibold text-gray-500">
-                {pos} <span className="text-gray-600 font-normal">· {positionOverall} OVR</span>
+            <div className="flex flex-col sm:flex-row sm:items-baseline gap-0.5 sm:gap-2 mb-2">
+              <h2 className="text-sm font-bold text-gray-200">
+                {pos} <span className={`font-semibold ${overallColor(positionOverall)}`}>· {positionOverall} OVR</span>
               </h2>
-              <p className="text-xs text-gray-600">
+              <p className="text-[11px] text-gray-400">
                 {abbrevLabel(attrLabels[0])} = {attrLabels[0]} · {abbrevLabel(attrLabels[1])} = {attrLabels[1]} ·{' '}
                 {abbrevLabel(attrLabels[2])} = {attrLabels[2]}
               </p>
@@ -776,7 +796,7 @@ function RosterView({
                         )}
                       </div>
                     )}
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-gray-400">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-gray-300">
                       <span>Age {p.age}</span>
                       <span>Exp {!p.experience ? 'R' : p.experience}</span>
                       <span className={overallColor(p.ratings.overall)}>{p.ratings.overall} OVR</span>
@@ -784,7 +804,12 @@ function RosterView({
                       <span className="whitespace-nowrap">{p.contract ? formatMoney(p.contract.salary) : '-'}</span>
                       <span>{p.contract?.yearsLeft ?? '-'}yr left</span>
                     </div>
-                    <div className="text-gray-600 mt-0.5">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-gray-400 mt-0.5">
+                      <span title={attrLabels[0]}>{abbrevLabel(attrLabels[0])} {p.ratings.attr1}</span>
+                      <span title={attrLabels[1]}>{abbrevLabel(attrLabels[1])} {p.ratings.attr2}</span>
+                      <span title={attrLabels[2]}>{abbrevLabel(attrLabels[2])} {p.ratings.attr3}</span>
+                    </div>
+                    <div className="text-gray-400 mt-0.5">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
                     {editable && (
                       <div className="flex gap-2 mt-1.5">
                         <button
@@ -1257,27 +1282,50 @@ interface TradeCardPlayer {
   age: number
   overall: number
   potential: number
+  attr1: number
+  attr2: number
+  attr3: number
   salary: number
+  yearsLeft: number | null
 }
 
-/** One player's row inside a trade breakdown card - name/pos/age, OVR/POT/salary, and this season's stat line so a trade can be judged on more than just OVR. */
+/**
+ * One player's block inside a trade breakdown card - stacked (not a wide
+ * row) so it stays readable in a narrow, always-two-columns "your team vs.
+ * their team" layout on a phone: name, position/age, OVR/POT, the position's
+ * 3 attribute ratings, salary/years, and this season's stat line so a trade
+ * can be judged on more than just OVR.
+ */
 function TradePlayerCard({ player, statLine }: { player: TradeCardPlayer; statLine: string }) {
+  const attrLabels = POSITION_ATTRIBUTES[player.position]
   return (
-    <div className="mb-1 last:mb-0">
-      <div className="flex items-center justify-between gap-2">
-        <span>
-          {player.firstName} {player.lastName}{' '}
-          <span className="text-gray-500">
-            ({player.position}, {player.age}y)
-          </span>
+    <div className="mb-2 last:mb-0 pb-2 last:pb-0 border-b border-slate-800 last:border-0">
+      <div className="font-medium truncate">
+        {player.firstName} {player.lastName}
+      </div>
+      <div className="text-gray-500">
+        {player.position} &middot; {player.age}y
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+        <span className={overallColor(player.overall)}>{player.overall} OVR</span>
+        <span className="text-yellow-400">{player.potential} POT</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-gray-400 mt-0.5">
+        <span title={attrLabels[0]}>
+          {abbrevLabel(attrLabels[0])} {player.attr1}
         </span>
-        <span className="flex items-center gap-2 shrink-0">
-          <span className={overallColor(player.overall)}>{player.overall} OVR</span>
-          <span className="text-yellow-400">{player.potential} POT</span>
-          <span className="text-gray-400 whitespace-nowrap">{formatMoney(player.salary)}</span>
+        <span title={attrLabels[1]}>
+          {abbrevLabel(attrLabels[1])} {player.attr2}
+        </span>
+        <span title={attrLabels[2]}>
+          {abbrevLabel(attrLabels[2])} {player.attr3}
         </span>
       </div>
-      <div className="text-gray-600 text-[10px]">{statLine}</div>
+      <div className="text-gray-400 whitespace-nowrap mt-0.5">
+        {formatMoney(player.salary)}
+        {player.yearsLeft != null && ` · ${player.yearsLeft}yr`}
+      </div>
+      {statLine !== '-' && <div className="text-gray-500 mt-0.5">{statLine}</div>}
     </div>
   )
 }
@@ -1619,9 +1667,9 @@ function TradeView({
                       </button>
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
                     <div className="bg-black/20 rounded px-2 py-1.5">
-                      <div className="text-gray-500 mb-0.5">You send</div>
+                      <div className="text-red-400 font-semibold mb-1">You Send</div>
                       {s.give.map((p, i) => (
                         <TradePlayerCard key={s.giveIds[i]} player={p} statLine={statLineFor(s.giveIds[i], p.position)} />
                       ))}
@@ -1640,7 +1688,7 @@ function TradeView({
                       )}
                     </div>
                     <div className="bg-black/20 rounded px-2 py-1.5">
-                      <div className="text-gray-500 mb-0.5">You get</div>
+                      <div className="text-emerald-400 font-semibold mb-1">You Get</div>
                       {s.get.map((p, i) => (
                         <TradePlayerCard key={s.getIds[i]} player={p} statLine={statLineFor(s.getIds[i], p.position)} />
                       ))}
@@ -1806,7 +1854,11 @@ function TradeOfferRow({
     age: p.age,
     overall: p.ratings.overall,
     potential: p.ratings.potential,
+    attr1: p.ratings.attr1,
+    attr2: p.ratings.attr2,
+    attr3: p.ratings.attr3,
     salary: p.contract?.salary ?? 0,
+    yearsLeft: p.contract?.yearsLeft ?? null,
   })
   const offerSalary = offerPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
   const requestSalary = requestPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
@@ -1834,22 +1886,9 @@ function TradeOfferRow({
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+      <div className="grid grid-cols-2 gap-2 text-[11px]">
         <div className="bg-black/20 rounded px-2 py-1.5">
-          <div className="text-gray-500 mb-0.5">You get</div>
-          {offerPlayers.map((p) => (
-            <TradePlayerCard key={p.id} player={toCard(p)} statLine={statLineFor(p.id, p.position)} />
-          ))}
-          {offer.offerPicks.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1.5">
-              {offer.offerPicks.map((r) => (
-                <OfferPickChip key={pickRefKey(r)} r={r} teamId={offer.fromTeamId} abbrev={abbrev} season={season} />
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="bg-black/20 rounded px-2 py-1.5">
-          <div className="text-gray-500 mb-0.5">You give up</div>
+          <div className="text-red-400 font-semibold mb-1">You Send</div>
           {requestPlayers.map((p) => (
             <TradePlayerCard key={p.id} player={toCard(p)} statLine={statLineFor(p.id, p.position)} />
           ))}
@@ -1857,6 +1896,19 @@ function TradeOfferRow({
             <div className="flex flex-wrap gap-1 mt-1.5">
               {offer.requestPicks.map((r) => (
                 <OfferPickChip key={pickRefKey(r)} r={r} teamId={userTeamId} abbrev={abbrev} season={season} />
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="bg-black/20 rounded px-2 py-1.5">
+          <div className="text-emerald-400 font-semibold mb-1">You Get</div>
+          {offerPlayers.map((p) => (
+            <TradePlayerCard key={p.id} player={toCard(p)} statLine={statLineFor(p.id, p.position)} />
+          ))}
+          {offer.offerPicks.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {offer.offerPicks.map((r) => (
+                <OfferPickChip key={pickRefKey(r)} r={r} teamId={offer.fromTeamId} abbrev={abbrev} season={season} />
               ))}
             </div>
           )}
