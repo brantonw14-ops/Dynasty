@@ -388,6 +388,12 @@ function overallColor(n: number) {
   return 'text-orange-400'
 }
 
+/** A position's 3 attribute ratings always keep the same color by slot (1st/2nd/3rd), so e.g. Speed reads as the same color everywhere it appears, not colored by how good this particular player's number happens to be. */
+const ATTR_SLOT_COLORS = ['text-blue-400', 'text-gray-100', 'text-orange-400']
+function attrSlotColor(slot: 0 | 1 | 2) {
+  return ATTR_SLOT_COLORS[slot]
+}
+
 /**
  * A card background tint for a depth-chart list - the better the player
  * relative to others at their position, the lighter the card, so scanning
@@ -823,13 +829,13 @@ function RosterView({
                     <div className="flex items-end justify-between gap-2 mt-1">
                       <div className="text-gray-400 min-w-0">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
                       <div className="flex gap-2 shrink-0">
-                        <span title={attrLabels[0]} className={overallColor(p.ratings.attr1)}>
+                        <span title={attrLabels[0]} className={attrSlotColor(0)}>
                           {abbrevLabel(attrLabels[0])} {p.ratings.attr1}
                         </span>
-                        <span title={attrLabels[1]} className={overallColor(p.ratings.attr2)}>
+                        <span title={attrLabels[1]} className={attrSlotColor(1)}>
                           {abbrevLabel(attrLabels[1])} {p.ratings.attr2}
                         </span>
-                        <span title={attrLabels[2]} className={overallColor(p.ratings.attr3)}>
+                        <span title={attrLabels[2]} className={attrSlotColor(2)}>
                           {abbrevLabel(attrLabels[2])} {p.ratings.attr3}
                         </span>
                       </div>
@@ -933,9 +939,9 @@ function RosterView({
                         {p.trend === 'down' && <span className="ml-1 text-red-400" title="Playing poorly lately">▼</span>}
                       </td>
                       <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
-                      <td className="py-1 px-2 text-right" title={attrLabels[0]}>{p.ratings.attr1}</td>
-                      <td className="py-1 px-2 text-right" title={attrLabels[1]}>{p.ratings.attr2}</td>
-                      <td className="py-1 px-2 text-right" title={attrLabels[2]}>{p.ratings.attr3}</td>
+                      <td className={`py-1 px-2 text-right ${attrSlotColor(0)}`} title={attrLabels[0]}>{p.ratings.attr1}</td>
+                      <td className={`py-1 px-2 text-right ${attrSlotColor(1)}`} title={attrLabels[1]}>{p.ratings.attr2}</td>
+                      <td className={`py-1 px-2 text-right ${attrSlotColor(2)}`} title={attrLabels[2]}>{p.ratings.attr3}</td>
                       <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
                         {p.contract ? formatMoney(p.contract.salary) : '-'}
                       </td>
