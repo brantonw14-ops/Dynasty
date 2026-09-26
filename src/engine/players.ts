@@ -287,6 +287,14 @@ export const STARTER_COUNTS: Record<Position, number> = {
   QB: 1, RB: 2, WR: 3, TE: 1, OL: 5, DL: 4, LB: 3, CB: 3, S: 2, K: 1, P: 1,
 }
 
+/** Whether a player is in their team's starting group at their position - by depth-chart order, not raw overall. */
+export function isStarterInRoster(player: { id: number; position: Position; depthOrder: number }, roster: { id: number; position: Position; depthOrder: number }[]): boolean {
+  const group = roster.filter((p) => p.position === player.position).sort((a, b) => a.depthOrder - b.depthOrder)
+  const starterCount = Math.min(STARTER_COUNTS[player.position] ?? 1, group.length)
+  const rank = group.findIndex((p) => p.id === player.id)
+  return rank >= 0 && rank < starterCount
+}
+
 /**
  * A position group's overall isn't a flat average of the whole depth chart -
  * the starter and the next man up matter far more than the 3rd/4th string

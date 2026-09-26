@@ -21,6 +21,7 @@ import {
   classifyTeamOutlook,
   generateRosterForTeam,
   generateStreetFreeAgents,
+  isStarterInRoster,
   MIN_ROSTER_SIZE,
   nextDepthOrder,
   rosterNeeds,
@@ -1299,6 +1300,7 @@ export interface SuggestedTradePlayer {
   attr3: number
   salary: number
   yearsLeft: number | null
+  isStarter: boolean
 }
 
 export interface SuggestedTrade {
@@ -1311,7 +1313,7 @@ export interface SuggestedTrade {
   reason: string
 }
 
-function toSuggestedTradePlayer(p: Player): SuggestedTradePlayer {
+function toSuggestedTradePlayer(p: Player, roster: Player[]): SuggestedTradePlayer {
   return {
     id: p.id,
     firstName: p.firstName,
@@ -1325,6 +1327,7 @@ function toSuggestedTradePlayer(p: Player): SuggestedTradePlayer {
     attr3: p.ratings.attr3,
     salary: p.contract?.salary ?? 0,
     yearsLeft: p.contract?.yearsLeft ?? null,
+    isStarter: isStarterInRoster(p, roster),
   }
 }
 
@@ -1505,8 +1508,8 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
 
       suggestions.push({
         otherTeamId: team.id,
-        give: result.give.map(toSuggestedTradePlayer),
-        get: getSet.map(toSuggestedTradePlayer),
+        give: result.give.map((p) => toSuggestedTradePlayer(p, myRoster)),
+        get: getSet.map((p) => toSuggestedTradePlayer(p, theirRoster)),
         giveIds: result.give.map((p) => p.id),
         getIds: getSet.map((p) => p.id),
         givePicks: result.picks,

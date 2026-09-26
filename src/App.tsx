@@ -35,6 +35,7 @@ import { buildGameReasons, classifyGamePerformance, performanceBlurb } from './e
 import {
   computePositionOverall,
   computeTeamOverall,
+  isStarterInRoster,
   MIN_ROSTER_SIZE,
   POSITION_ATTRIBUTES,
   ROSTER_SHAPE,
@@ -209,18 +210,15 @@ function TeamPositionPanel({
           >
             <div className="text-[10px] text-gray-500">{s.pos}</div>
             <div className="text-sm font-semibold text-green-400">{s.positionOverall || '-'}</div>
-            <div className={`text-[10px] ${s.isOver ? 'text-red-400 font-semibold' : s.isNeed ? 'text-amber-400' : 'text-gray-600'}`}>
+            <div className={`text-[10px] ${s.isOver ? 'text-red-400 font-semibold' : s.isNeed ? 'text-amber-400' : 'text-gray-500'}`}>
               {s.group.length}/{s.target}
             </div>
           </button>
         ))}
       </div>
-      <p className="text-xs text-gray-600 mt-1">
-        Position overall reflects your starters, not a flat roster average. Each tile also shows how many you have vs.
-        the target for that spot (e.g. 12/10) - <span className="text-amber-400">amber</span> means you're under and
-        it's a need, <span className="text-red-400">red dashed</span> means you're carrying more than you need there
-        and could free up cap space/a roster spot by cutting the weakest one. Click a position to see/cut individual
-        players and filter the list below to just that position.
+      <p className="text-xs text-gray-400 mt-1">
+        Tap a position for details. <span className="text-amber-400 font-medium">Amber</span> = need it,{' '}
+        <span className="text-red-400 font-medium">red dashed</span> = you have more than needed.
       </p>
       {expanded && (
         <div className="mt-2 border rounded p-2 overflow-x-auto">
@@ -597,7 +595,7 @@ function BoxScoreTable({
                   {player ? `${player.firstName} ${player.lastName}` : `Player ${s.playerId}`}
                 </td>
                 <td className="py-1 pr-2">{s.position}</td>
-                <td className={`py-1 pr-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-600'}`}>
+                <td className={`py-1 pr-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-500'}`}>
                   {grade ?? '-'}
                 </td>
                 <td className="py-1 pl-2 text-left text-gray-500 whitespace-nowrap">{gameStatLine(s.position, s)}</td>
@@ -822,12 +820,20 @@ function RosterView({
                       <span className="whitespace-nowrap">{p.contract ? formatMoney(p.contract.salary) : '-'}</span>
                       <span>{p.contract?.yearsLeft ?? '-'}yr left</span>
                     </div>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-gray-400 mt-0.5">
-                      <span title={attrLabels[0]}>{abbrevLabel(attrLabels[0])} {p.ratings.attr1}</span>
-                      <span title={attrLabels[1]}>{abbrevLabel(attrLabels[1])} {p.ratings.attr2}</span>
-                      <span title={attrLabels[2]}>{abbrevLabel(attrLabels[2])} {p.ratings.attr3}</span>
+                    <div className="flex items-end justify-between gap-2 mt-1">
+                      <div className="text-gray-400 min-w-0">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
+                      <div className="flex gap-2 shrink-0">
+                        <span title={attrLabels[0]} className={overallColor(p.ratings.attr1)}>
+                          {abbrevLabel(attrLabels[0])} {p.ratings.attr1}
+                        </span>
+                        <span title={attrLabels[1]} className={overallColor(p.ratings.attr2)}>
+                          {abbrevLabel(attrLabels[1])} {p.ratings.attr2}
+                        </span>
+                        <span title={attrLabels[2]} className={overallColor(p.ratings.attr3)}>
+                          {abbrevLabel(attrLabels[2])} {p.ratings.attr3}
+                        </span>
+                      </div>
                     </div>
-                    <div className="text-gray-400 mt-0.5">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
                     {editable && (
                       <div className="flex gap-2 mt-1.5">
                         <button
@@ -1206,7 +1212,7 @@ function GameReportView({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
             <h3 className="text-sm font-semibold text-red-400 mb-2">Turned It Over</h3>
-            {turnoversCommitted.length === 0 && <p className="text-xs text-gray-600">No turnovers given up.</p>}
+            {turnoversCommitted.length === 0 && <p className="text-xs text-gray-500">No turnovers given up.</p>}
             <ul className="text-sm space-y-1.5">
               {turnoversCommitted.map(({ player, count }) => (
                 <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
@@ -1223,7 +1229,7 @@ function GameReportView({
           </div>
           <div>
             <h3 className="text-sm font-semibold text-green-400 mb-2">Takeaways</h3>
-            {turnoversForced.length === 0 && <p className="text-xs text-gray-600">No takeaways forced.</p>}
+            {turnoversForced.length === 0 && <p className="text-xs text-gray-500">No takeaways forced.</p>}
             <ul className="text-sm space-y-1.5">
               {turnoversForced.map(({ player, count }) => (
                 <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
@@ -1242,7 +1248,7 @@ function GameReportView({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div>
           <h3 className="text-sm font-semibold text-green-400 mb-2">Played Well</h3>
-          {goodPerformers.length === 0 && <p className="text-xs text-gray-600">No standout performances this game.</p>}
+          {goodPerformers.length === 0 && <p className="text-xs text-gray-500">No standout performances this game.</p>}
           <ul className="text-sm space-y-1.5">
             {goodPerformers.map(({ player, blurb }) => (
               <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
@@ -1257,7 +1263,7 @@ function GameReportView({
         </div>
         <div>
           <h3 className="text-sm font-semibold text-red-400 mb-2">Played Poorly</h3>
-          {badPerformers.length === 0 && <p className="text-xs text-gray-600">No poor performances this game.</p>}
+          {badPerformers.length === 0 && <p className="text-xs text-gray-500">No poor performances this game.</p>}
           <ul className="text-sm space-y-1.5">
             {badPerformers.map(({ player, blurb }) => (
               <li key={player.id} className="flex justify-between gap-2 border-b border-gray-800 pb-1">
@@ -1274,7 +1280,7 @@ function GameReportView({
 
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-gray-500 mb-2">Box Score</h3>
-        <p className="text-xs text-gray-600 mb-2">
+        <p className="text-xs text-gray-500 mb-2">
           Every player who recorded a stat this game, graded against their position peers league-wide for this same
           week - not just the standout performances above.
         </p>
@@ -1296,12 +1302,12 @@ function GameReportView({
 
       <div className="border rounded p-3">
         <h3 className="text-sm font-semibold text-gray-500 mb-2">Season Trends - Where to Upgrade</h3>
-        <p className="text-xs text-gray-600 mb-2">
+        <p className="text-xs text-gray-500 mb-2">
           Positions with more bad games than good ones across the {sortedGames.length} game(s) played so far this season - a
           single rough game is noise, a repeated one is a real weakness. Cap space: {formatMoney(capSpace)}.
         </p>
         {weakPositions.length === 0 && (
-          <p className="text-xs text-gray-600">No position has a losing performance trend yet.</p>
+          <p className="text-xs text-gray-500">No position has a losing performance trend yet.</p>
         )}
         <ul className="text-sm space-y-1.5">
           {weakPositions.map((w) => (
@@ -1345,6 +1351,7 @@ interface TradeCardPlayer {
   attr3: number
   salary: number
   yearsLeft: number | null
+  isStarter: boolean
 }
 
 /**
@@ -1358,8 +1365,17 @@ function TradePlayerCard({ player, statLine }: { player: TradeCardPlayer; statLi
   const attrLabels = POSITION_ATTRIBUTES[player.position]
   return (
     <div className="mb-2 last:mb-0 pb-2 last:pb-0 border-b border-slate-800 last:border-0">
-      <div className="font-medium truncate">
-        {player.firstName} {player.lastName}
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`text-[9px] px-1 py-0.5 rounded font-semibold whitespace-nowrap shrink-0 ${
+            player.isStarter ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-300'
+          }`}
+        >
+          {player.isStarter ? 'STARTER' : 'BENCH'}
+        </span>
+        <span className="font-medium truncate">
+          {player.firstName} {player.lastName}
+        </span>
       </div>
       <div className="text-gray-500">
         {player.position} &middot; {player.age}y
@@ -1368,14 +1384,14 @@ function TradePlayerCard({ player, statLine }: { player: TradeCardPlayer; statLi
         <span className={overallColor(player.overall)}>{player.overall} OVR</span>
         <span className="text-yellow-400">{player.potential} POT</span>
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-gray-400 mt-0.5">
-        <span title={attrLabels[0]}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+        <span title={attrLabels[0]} className={overallColor(player.attr1)}>
           {abbrevLabel(attrLabels[0])} {player.attr1}
         </span>
-        <span title={attrLabels[1]}>
+        <span title={attrLabels[1]} className={overallColor(player.attr2)}>
           {abbrevLabel(attrLabels[1])} {player.attr2}
         </span>
-        <span title={attrLabels[2]}>
+        <span title={attrLabels[2]} className={overallColor(player.attr3)}>
           {abbrevLabel(attrLabels[2])} {player.attr3}
         </span>
       </div>
@@ -1633,7 +1649,7 @@ function TradeView({
     setFn: (s: Set<string>) => void,
   ) => {
     if (picks.length === 0) {
-      return <p className="text-xs text-gray-600 mt-2">No picks owned in the next {PICK_YEARS_AHEAD} years.</p>
+      return <p className="text-xs text-gray-500 mt-2">No picks owned in the next {PICK_YEARS_AHEAD} years.</p>
     }
     const byYear = new Map<number, TradePickRef[]>()
     for (const r of picks) {
@@ -1669,7 +1685,7 @@ function TradeView({
                 })}
             </div>
           ))}
-        <p className="text-[10px] text-gray-600">* = acquired via a previous trade, not this team's own original pick.</p>
+        <p className="text-[10px] text-gray-500">* = acquired via a previous trade, not this team's own original pick.</p>
       </div>
     )
   }
@@ -1831,7 +1847,7 @@ function TradeView({
                 <span className={otherCapSpaceAfter < 0 ? 'text-red-400 font-semibold' : 'text-green-400'}>
                   {formatMoney(otherCapSpaceAfter)}
                 </span>{' '}
-                <span className="text-gray-600">(currently {formatMoney(otherCapSpace)})</span>
+                <span className="text-gray-500">(currently {formatMoney(otherCapSpace)})</span>
               </p>
               {renderRoster(otherRoster, getIds, setGetIds, getSort, setGetSort, false)}
               <h4 className="text-xs font-semibold text-gray-400 mt-3">Their draft picks</h4>
@@ -1902,10 +1918,15 @@ function TradeOfferRow({
     (): Promise<Player[]> => db.players.bulkGet(offer.requestPlayerIds).then((ps) => ps.filter((p): p is Player => p != null)),
     [offer.id],
   )
+  const fromRoster = useLiveQuery(
+    () => db.players.where('teamId').equals(offer.fromTeamId).toArray(),
+    [offer.fromTeamId],
+  )
+  const userRoster = useLiveQuery(() => db.players.where('teamId').equals(userTeamId).toArray(), [userTeamId])
 
-  if (!offerPlayers || !requestPlayers) return null
+  if (!offerPlayers || !requestPlayers || !fromRoster || !userRoster) return null
 
-  const toCard = (p: Player): TradeCardPlayer => ({
+  const toCard = (p: Player, roster: Player[]): TradeCardPlayer => ({
     firstName: p.firstName,
     lastName: p.lastName,
     position: p.position,
@@ -1917,6 +1938,7 @@ function TradeOfferRow({
     attr3: p.ratings.attr3,
     salary: p.contract?.salary ?? 0,
     yearsLeft: p.contract?.yearsLeft ?? null,
+    isStarter: isStarterInRoster(p, roster),
   })
   const offerSalary = offerPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
   const requestSalary = requestPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
@@ -1948,7 +1970,7 @@ function TradeOfferRow({
         <div className="bg-black/20 rounded px-2 py-1.5">
           <div className="text-red-400 font-semibold mb-1">You Send</div>
           {requestPlayers.map((p) => (
-            <TradePlayerCard key={p.id} player={toCard(p)} statLine={statLineFor(p.id, p.position)} />
+            <TradePlayerCard key={p.id} player={toCard(p, userRoster)} statLine={statLineFor(p.id, p.position)} />
           ))}
           {offer.requestPicks.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1.5">
@@ -1961,7 +1983,7 @@ function TradeOfferRow({
         <div className="bg-black/20 rounded px-2 py-1.5">
           <div className="text-emerald-400 font-semibold mb-1">You Get</div>
           {offerPlayers.map((p) => (
-            <TradePlayerCard key={p.id} player={toCard(p)} statLine={statLineFor(p.id, p.position)} />
+            <TradePlayerCard key={p.id} player={toCard(p, fromRoster)} statLine={statLineFor(p.id, p.position)} />
           ))}
           {offer.offerPicks.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1.5">
@@ -2153,8 +2175,7 @@ function StatsLeadersView({
           {cat.rows.length === 0 ? (
             <p className="text-xs text-gray-500">No data yet.</p>
           ) : (
-            <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-<table className="w-full min-w-[560px] text-sm border-collapse data-table">
+            <table className="w-full text-sm border-collapse data-table">
               <tbody>
                 {cat.rows.map((r, i) => (
                   <tr
@@ -2162,8 +2183,8 @@ function StatsLeadersView({
                     className={`border-b ${isUserPlayer(r.playerId) ? 'bg-blue-900/50 border-l-2 border-l-blue-400 text-blue-100 font-medium' : ''}`}
                   >
                     <td className="py-1 text-gray-400 w-5 pl-1">{i + 1}</td>
-                    <td className="py-1">{nameFor(r.playerId)}</td>
-                    <td className="py-1 text-right">
+                    <td className="py-1 truncate max-w-0">{nameFor(r.playerId)}</td>
+                    <td className="py-1 text-right whitespace-nowrap">
                       {r.value.toLocaleString()} {cat.unit}
                       {r.extra != null && r.extra > 0 ? ` · ${r.extra} TD` : ''}
                     </td>
@@ -2171,7 +2192,6 @@ function StatsLeadersView({
                 ))}
               </tbody>
             </table>
-</div>
           )}
         </div>
       ))}
@@ -2337,7 +2357,7 @@ function ResignView({
                 <td className="py-1 px-2 text-right">{p.age}</td>
                 <td className={`py-1 px-2 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
                 <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
-                <td className={`py-1 px-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-600'}`}>
+                <td className={`py-1 px-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-500'}`}>
                   {grade ?? '-'}
                 </td>
                 <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
@@ -2712,7 +2732,7 @@ function DraftView({
       </div>
 
       {!board.isUserTurn && board.currentTeamId != null && (
-        <p className="text-xs text-gray-600 mb-3">Waiting on {teamName(board.currentTeamId)} to pick...</p>
+        <p className="text-xs text-gray-500 mb-3">Waiting on {teamName(board.currentTeamId)} to pick...</p>
       )}
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
@@ -2847,7 +2867,7 @@ function DraftView({
                   <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
                   <td className="py-1 pr-4 whitespace-nowrap">
                     {p.college}
-                    <div className="text-[10px] text-gray-600">{COLLEGE_TIER_LABELS[p.collegeTier]}</div>
+                    <div className="text-[10px] text-gray-500">{COLLEGE_TIER_LABELS[p.collegeTier]}</div>
                   </td>
                   <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{p.collegeStatLine}</td>
                   <td className="py-1 pr-4 text-gray-500 max-w-xs">{p.scoutingNote}</td>
@@ -3456,7 +3476,7 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
       </div>
 
       {selected && (
-        <p className="text-sm text-gray-600 mb-3">
+        <p className="text-sm text-gray-500 mb-3">
           {selected.region} {selected.name}: {OUTLOOK_LABELS[selected.outlook]} &middot;{' '}
           {selected.overall} team overall &middot; {formatMoney(selected.capSpace)} available to
           spend
