@@ -2797,11 +2797,18 @@ function StandingsTable({
               const standings = computeStandings(divTeams, regularGames)
               return (
                 <div key={div}>
-                  <h3 className="text-xs font-semibold text-gray-500 mb-1">
+                  <h3 className="text-xs font-semibold text-blue-400 mb-1">
                     {conf} {div}
                   </h3>
-                  <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-<table className="w-full min-w-[560px] text-sm border-collapse data-table">
+                  <table className="w-full text-sm border-collapse data-table">
+                    <thead>
+                      <tr className="text-gray-500 text-[10px]">
+                        <th className="py-1 pl-1 text-left font-normal"></th>
+                        <th className="py-1 text-right w-8 font-normal">W</th>
+                        <th className="py-1 text-right w-8 font-normal">L</th>
+                        <th className="py-1 text-right w-8 font-normal">T</th>
+                      </tr>
+                    </thead>
                     <tbody>
                       {standings.map((row) => (
                         <tr
@@ -2809,14 +2816,13 @@ function StandingsTable({
                           className={`border-b ${userRowClass(row.teamId, userTeamId)}`}
                         >
                           <td className="py-1 pl-1">{teamName(row.teamId)}</td>
-                          <td className="py-1 text-right w-10">{row.wins}</td>
-                          <td className="py-1 text-right w-10">{row.losses}</td>
-                          <td className="py-1 text-right w-10">{row.ties}</td>
+                          <td className="py-1 text-right w-8 text-emerald-400 font-semibold">{row.wins}</td>
+                          <td className="py-1 text-right w-8 text-red-400 font-semibold">{row.losses}</td>
+                          <td className="py-1 text-right w-8 text-gray-400">{row.ties}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-</div>
                 </div>
               )
             })}
@@ -2863,26 +2869,26 @@ function PlayoffPictureView({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 mb-8">
         {CONFERENCES.map((conf) => (
           <div key={conf}>
-            <h3 className="text-xs font-semibold text-gray-500 mb-1">{conf} Seeding</h3>
-            <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-<table className="w-full min-w-[560px] text-sm border-collapse data-table">
+            <h3 className="text-xs font-semibold text-blue-400 mb-1">{conf} Seeding</h3>
+            <table className="w-full text-sm border-collapse data-table">
               <tbody>
                 {seedsByConf[conf].map((s) => (
                   <tr key={s.teamId} className={`border-b ${userRowClass(s.teamId, userTeamId)}`}>
-                    <td className="py-1 pl-1 w-6 text-gray-400">{s.seed}</td>
+                    <td className="py-1 pl-1 w-6 text-cyan-400 font-semibold">{s.seed}</td>
                     <td className="py-1">
                       {teamName(s.teamId)}
-                      {s.divisionWinner && <span className="text-gray-400 text-xs"> (div)</span>}
+                      {s.divisionWinner && <span className="text-amber-400 text-xs"> (div)</span>}
                     </td>
-                    <td className="py-1 text-right w-16">
-                      {s.wins}-{s.losses}
-                      {s.ties ? `-${s.ties}` : ''}
+                    <td className="py-1 text-right w-16 whitespace-nowrap">
+                      <span className="text-emerald-400 font-semibold">{s.wins}</span>
+                      <span className="text-gray-500">-</span>
+                      <span className="text-red-400 font-semibold">{s.losses}</span>
+                      {s.ties ? <span className="text-gray-400">-{s.ties}</span> : ''}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-</div>
           </div>
         ))}
       </div>
