@@ -422,6 +422,47 @@ function emptySeasonTotals(): SeasonStatTotals {
   }
 }
 
+/** Aggregates raw per-game stat rows into one running total per player, for the season (or however many rows are handed in). */
+function buildSeasonStatTotals(stats: PlayerGameStats[]): Map<number, SeasonStatTotals> {
+  const statTotals = new Map<number, SeasonStatTotals>()
+  for (const s of stats) {
+    const t = statTotals.get(s.playerId) ?? emptySeasonTotals()
+    t.passYards += s.passYards
+    t.passTDs += s.passTDs
+    t.passAttempts += s.passAttempts
+    t.passCompletions += s.passCompletions
+    t.interceptions += s.interceptions
+    t.rushYards += s.rushYards
+    t.rushAttempts += s.rushAttempts
+    t.rushTDs += s.rushTDs
+    t.recYards += s.recYards
+    t.recTDs += s.recTDs
+    t.receptions += s.receptions
+    t.tackles += s.tackles
+    t.sacks += s.sacks
+    t.tacklesForLoss += s.tacklesForLoss
+    t.passBreakups += s.passBreakups
+    t.defInterceptions += s.defInterceptions
+    t.yardsAllowed += s.yardsAllowed
+    if (s.passerRatingAllowed > 0) {
+      t.passerRatingAllowedSum += s.passerRatingAllowed
+      t.passerRatingAllowedGames += 1
+    }
+    t.pancakes += s.pancakes
+    t.sacksAllowed += s.sacksAllowed
+    t.tflsAllowed += s.tflsAllowed
+    t.fieldGoalsMade += s.fieldGoalsMade
+    t.fieldGoalsAttempted += s.fieldGoalsAttempted
+    t.longestFieldGoal = Math.max(t.longestFieldGoal, s.longestFieldGoal)
+    t.extraPointsMade += s.extraPointsMade
+    t.extraPointsAttempted += s.extraPointsAttempted
+    t.puntCount += s.puntCount
+    t.puntYards += s.puntYards
+    statTotals.set(s.playerId, t)
+  }
+  return statTotals
+}
+
 function seasonStatLine(pos: Position, t?: SeasonStatTotals) {
   if (!t) return '-'
   if (pos === 'QB' && (t.passYards > 0 || t.passTDs > 0 || t.passAttempts > 0)) {
@@ -548,42 +589,7 @@ function RosterView({
 
   if (!team || !roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
-  const statTotals = new Map<number, SeasonStatTotals>()
-  for (const s of stats) {
-    const t = statTotals.get(s.playerId) ?? emptySeasonTotals()
-    t.passYards += s.passYards
-    t.passTDs += s.passTDs
-    t.passAttempts += s.passAttempts
-    t.passCompletions += s.passCompletions
-    t.interceptions += s.interceptions
-    t.rushYards += s.rushYards
-    t.rushAttempts += s.rushAttempts
-    t.rushTDs += s.rushTDs
-    t.recYards += s.recYards
-    t.recTDs += s.recTDs
-    t.receptions += s.receptions
-    t.tackles += s.tackles
-    t.sacks += s.sacks
-    t.tacklesForLoss += s.tacklesForLoss
-    t.passBreakups += s.passBreakups
-    t.defInterceptions += s.defInterceptions
-    t.yardsAllowed += s.yardsAllowed
-    if (s.passerRatingAllowed > 0) {
-      t.passerRatingAllowedSum += s.passerRatingAllowed
-      t.passerRatingAllowedGames += 1
-    }
-    t.pancakes += s.pancakes
-    t.sacksAllowed += s.sacksAllowed
-    t.tflsAllowed += s.tflsAllowed
-    t.fieldGoalsMade += s.fieldGoalsMade
-    t.fieldGoalsAttempted += s.fieldGoalsAttempted
-    t.longestFieldGoal = Math.max(t.longestFieldGoal, s.longestFieldGoal)
-    t.extraPointsMade += s.extraPointsMade
-    t.extraPointsAttempted += s.extraPointsAttempted
-    t.puntCount += s.puntCount
-    t.puntYards += s.puntYards
-    statTotals.set(s.playerId, t)
-  }
+  const statTotals = buildSeasonStatTotals(stats)
 
   const byPosition = new Map<Position, Player[]>()
   for (const p of roster) {
@@ -1114,6 +1120,38 @@ function pickLabel(r: TradePickRef, teamId: number, teamAbbrev: (id: number) => 
   return r.originalTeamId === teamId ? base : `${base} (via ${teamAbbrev(r.originalTeamId)})`
 }
 
+interface TradeCardPlayer {
+  firstName: string
+  lastName: string
+  position: Position
+  age: number
+  overall: number
+  potential: number
+  salary: number
+}
+
+/** One player's row inside a trade breakdown card - name/pos/age, OVR/POT/salary, and this season's stat line so a trade can be judged on more than just OVR. */
+function TradePlayerCard({ player, statLine }: { player: TradeCardPlayer; statLine: string }) {
+  return (
+    <div className="mb-1 last:mb-0">
+      <div className="flex items-center justify-between gap-2">
+        <span>
+          {player.firstName} {player.lastName}{' '}
+          <span className="text-gray-500">
+            ({player.position}, {player.age}y)
+          </span>
+        </span>
+        <span className="flex items-center gap-2 shrink-0">
+          <span className={overallColor(player.overall)}>{player.overall} OVR</span>
+          <span className="text-yellow-400">{player.potential} POT</span>
+          <span className="text-gray-400 whitespace-nowrap">{formatMoney(player.salary)}</span>
+        </span>
+      </div>
+      <div className="text-gray-600 text-[10px]">{statLine}</div>
+    </div>
+  )
+}
+
 function TradeView({
   leagueId,
   userTeamId,
@@ -1130,6 +1168,10 @@ function TradeView({
   const myRoster = useLiveQuery(
     () => db.players.where('teamId').equals(userTeamId).toArray(),
     [userTeamId],
+  )
+  const seasonStats = useLiveQuery(
+    () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
+    [leagueId, season],
   )
   const [otherTeamId, setOtherTeamId] = useState<number | null>(null)
   const [giveIds, setGiveIds] = useState<Set<number>>(new Set())
@@ -1157,6 +1199,9 @@ function TradeView({
   )
 
   if (!teams || !myRoster || !league) return <p className="text-sm text-gray-500">Loading...</p>
+
+  const statTotals = buildSeasonStatTotals(seasonStats ?? [])
+  const statLineFor = (playerId: number, position: Position) => seasonStatLine(position, statTotals.get(playerId))
 
   const abbrev = (id: number) => teams.find((t) => t.id === id)?.abbrev ?? `#${id}`
   const otherTeams = teams.filter((t) => t.id !== userTeamId)
@@ -1380,8 +1425,10 @@ function TradeView({
           )}
           <div className="flex flex-col gap-2">
             {suggestedTrades.map((s) => {
-              const key = `${s.otherTeamId}-${s.giveIds[0]}-${s.getIds[0]}-${s.givePicks.map(pickRefKey).join(',')}`
-              const netSalary = s.get.salary - s.give.salary
+              const key = `${s.otherTeamId}-${s.giveIds.join(',')}-${s.getIds.join(',')}-${s.givePicks.map(pickRefKey).join(',')}`
+              const giveSalary = s.give.reduce((sum, p) => sum + p.salary, 0)
+              const getSalary = s.get.reduce((sum, p) => sum + p.salary, 0)
+              const netSalary = getSalary - giveSalary
               return (
                 <div key={key} className="border-b border-emerald-900 pb-2 last:border-0 last:pb-0">
                   <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
@@ -1407,16 +1454,9 @@ function TradeView({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
                     <div className="bg-black/20 rounded px-2 py-1.5">
                       <div className="text-gray-500 mb-0.5">You send</div>
-                      <div className="flex items-center justify-between">
-                        <span>
-                          {s.give.firstName} {s.give.lastName} <span className="text-gray-500">({s.give.position})</span>
-                        </span>
-                        <span className="flex items-center gap-2 shrink-0">
-                          <span className={overallColor(s.give.overall)}>{s.give.overall} OVR</span>
-                          <span className="text-yellow-400">{s.give.potential} POT</span>
-                          <span className="text-gray-400 whitespace-nowrap">{formatMoney(s.give.salary)}</span>
-                        </span>
-                      </div>
+                      {s.give.map((p, i) => (
+                        <TradePlayerCard key={s.giveIds[i]} player={p} statLine={statLineFor(s.giveIds[i], p.position)} />
+                      ))}
                       {s.givePicks.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {s.givePicks.map((r) => (
@@ -1433,16 +1473,9 @@ function TradeView({
                     </div>
                     <div className="bg-black/20 rounded px-2 py-1.5">
                       <div className="text-gray-500 mb-0.5">You get</div>
-                      <div className="flex items-center justify-between">
-                        <span>
-                          {s.get.firstName} {s.get.lastName} <span className="text-gray-500">({s.get.position})</span>
-                        </span>
-                        <span className="flex items-center gap-2 shrink-0">
-                          <span className={overallColor(s.get.overall)}>{s.get.overall} OVR</span>
-                          <span className="text-yellow-400">{s.get.potential} POT</span>
-                          <span className="text-gray-400 whitespace-nowrap">{formatMoney(s.get.salary)}</span>
-                        </span>
-                      </div>
+                      {s.get.map((p, i) => (
+                        <TradePlayerCard key={s.getIds[i]} player={p} statLine={statLineFor(s.getIds[i], p.position)} />
+                      ))}
                     </div>
                   </div>
                   <p className="text-[10px] text-gray-500 mt-1">
@@ -1468,6 +1501,9 @@ function TradeView({
                 offer={offer}
                 teamName={teamName}
                 season={season}
+                userTeamId={userTeamId}
+                abbrev={abbrev}
+                statLineFor={statLineFor}
                 responding={respondingOfferId === offer.id}
                 onRespond={(accept) => handleRespondOffer(offer.id, accept)}
               />
@@ -1553,16 +1589,34 @@ function TradeView({
 }
 
 /** One row in the Incoming Trade Offers panel - what the AI team is sending vs. asking for, with an estimated pick value hint. */
+/** A pick chip showing its estimated trade value, so an incoming offer's picks are judged on more than just "R1"/"R3". */
+function OfferPickChip({ r, teamId, abbrev, season }: { r: TradePickRef; teamId: number; abbrev: (id: number) => string; season: number }) {
+  return (
+    <span
+      className="px-1.5 py-0.5 rounded border border-blue-700 bg-blue-900/40 text-blue-200 text-[10px]"
+      title={pickLabel(r, teamId, abbrev)}
+    >
+      {r.year} R{r.round} (~{Math.round(pickValue(r.round, r.year - season))} val)
+    </span>
+  )
+}
+
 function TradeOfferRow({
   offer,
   teamName,
   season,
+  userTeamId,
+  abbrev,
+  statLineFor,
   responding,
   onRespond,
 }: {
   offer: PendingTradeOffer
   teamName: (id: number) => string
   season: number
+  userTeamId: number
+  abbrev: (id: number) => string
+  statLineFor: (playerId: number, position: Position) => string
   responding: boolean
   onRespond: (accept: boolean) => void
 }) {
@@ -1577,34 +1631,75 @@ function TradeOfferRow({
 
   if (!offerPlayers || !requestPlayers) return null
 
-  const pickText = (refs: TradePickRef[]) =>
-    refs.map((r) => `${r.year} R${r.round} pick (trade value ~${Math.round(pickValue(r.round, r.year - season))})`)
+  const toCard = (p: Player): TradeCardPlayer => ({
+    firstName: p.firstName,
+    lastName: p.lastName,
+    position: p.position,
+    age: p.age,
+    overall: p.ratings.overall,
+    potential: p.ratings.potential,
+    salary: p.contract?.salary ?? 0,
+  })
+  const offerSalary = offerPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
+  const requestSalary = requestPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
+  // Positive = you'd be taking on more salary than you shed (cap space goes down).
+  const netSalary = offerSalary - requestSalary
 
   return (
-    <div className="border rounded p-2 flex items-center justify-between gap-3 flex-wrap">
-      <div className="text-sm">
-        <span className="font-semibold">{teamName(offer.fromTeamId)}</span> offers{' '}
-        {[...offerPlayers.map((p) => `${p.firstName} ${p.lastName} (${p.position}, ${p.ratings.overall} OVR)`), ...pickText(offer.offerPicks)].join(
-          ', ',
-        )}{' '}
-        for {[...requestPlayers.map((p) => `${p.firstName} ${p.lastName}`), ...pickText(offer.requestPicks)].join(', ')}
+    <div className="border border-blue-900 rounded p-2">
+      <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
+        <span className="text-blue-300 font-medium">{teamName(offer.fromTeamId)} wants to make a deal</span>
+        <div className="flex gap-2 shrink-0">
+          <button
+            onClick={() => onRespond(true)}
+            disabled={responding}
+            className="px-3 py-1 bg-green-600 text-white rounded text-xs disabled:opacity-50"
+          >
+            Accept
+          </button>
+          <button
+            onClick={() => onRespond(false)}
+            disabled={responding}
+            className="px-3 py-1 border rounded text-xs disabled:opacity-50"
+          >
+            Decline
+          </button>
+        </div>
       </div>
-      <div className="flex gap-2 shrink-0">
-        <button
-          onClick={() => onRespond(true)}
-          disabled={responding}
-          className="px-3 py-1 bg-green-600 text-white rounded text-xs disabled:opacity-50"
-        >
-          Accept
-        </button>
-        <button
-          onClick={() => onRespond(false)}
-          disabled={responding}
-          className="px-3 py-1 border rounded text-xs disabled:opacity-50"
-        >
-          Decline
-        </button>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+        <div className="bg-black/20 rounded px-2 py-1.5">
+          <div className="text-gray-500 mb-0.5">You get</div>
+          {offerPlayers.map((p) => (
+            <TradePlayerCard key={p.id} player={toCard(p)} statLine={statLineFor(p.id, p.position)} />
+          ))}
+          {offer.offerPicks.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {offer.offerPicks.map((r) => (
+                <OfferPickChip key={pickRefKey(r)} r={r} teamId={offer.fromTeamId} abbrev={abbrev} season={season} />
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="bg-black/20 rounded px-2 py-1.5">
+          <div className="text-gray-500 mb-0.5">You give up</div>
+          {requestPlayers.map((p) => (
+            <TradePlayerCard key={p.id} player={toCard(p)} statLine={statLineFor(p.id, p.position)} />
+          ))}
+          {offer.requestPicks.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {offer.requestPicks.map((r) => (
+                <OfferPickChip key={pickRefKey(r)} r={r} teamId={userTeamId} abbrev={abbrev} season={season} />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+      <p className="text-[10px] text-gray-500 mt-1">
+        Net cap impact:{' '}
+        <span className={netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-400'}>
+          {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
+        </span>
+      </p>
     </div>
   )
 }

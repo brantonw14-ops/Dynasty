@@ -537,12 +537,18 @@ async function main() {
     // Suggested trades: whatever comes back must actually be a deal the AI
     // side would take (evaluateTrade-accepted) and must fit the user's cap.
     const suggestions = await findSuggestedTrades(leagueId, 5)
-    console.log(`suggested trades: ${suggestions.length} candidate(s), ${suggestions.filter((s) => s.givePicks.length > 0).length} with a pick sweetener`)
+    const multiPiece = suggestions.filter((s) => s.giveIds.length + s.getIds.length + s.givePicks.length > 2).length
+    console.log(
+      `suggested trades: ${suggestions.length} candidate(s), ${suggestions.filter((s) => s.givePicks.length > 0).length} with a pick sweetener, ${multiPiece} multi-piece (not 1-for-1)`,
+    )
     const usedGiveIds = new Set<number>()
     const usedPickKeys = new Set<string>()
     let checked = 0
     for (const s of suggestions) {
       if (s.giveIds.length === 0 || s.getIds.length === 0) throw new Error('Suggested trade has an empty side')
+      if (s.give.length !== s.giveIds.length || s.get.length !== s.getIds.length) {
+        throw new Error('Suggested trade give/get detail arrays do not match their id arrays')
+      }
       // A player/pick already traded away by an earlier suggestion this loop
       // isn't a fresh failure of the feature - skip instead of asserting.
       if (s.giveIds.some((id) => usedGiveIds.has(id))) continue

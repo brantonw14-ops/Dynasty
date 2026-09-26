@@ -1271,6 +1271,7 @@ export interface SuggestedTradePlayer {
   firstName: string
   lastName: string
   position: Position
+  age: number
   overall: number
   potential: number
   salary: number
@@ -1278,8 +1279,8 @@ export interface SuggestedTradePlayer {
 
 export interface SuggestedTrade {
   otherTeamId: number
-  give: SuggestedTradePlayer
-  get: SuggestedTradePlayer
+  give: SuggestedTradePlayer[]
+  get: SuggestedTradePlayer[]
   giveIds: number[]
   getIds: number[]
   givePicks: TradePickRef[]
@@ -1292,6 +1293,7 @@ function toSuggestedTradePlayer(p: Player): SuggestedTradePlayer {
     firstName: p.firstName,
     lastName: p.lastName,
     position: p.position,
+    age: p.age,
     overall: p.ratings.overall,
     potential: p.ratings.potential,
     salary: p.contract?.salary ?? 0,
@@ -1299,18 +1301,81 @@ function toSuggestedTradePlayer(p: Player): SuggestedTradePlayer {
 }
 
 /**
- * Scans every AI team's roster for a one-for-one deal that would genuinely
- * upgrade the user's team (fills a need or clearly beats their current
- * starter at that spot) and that the AI side would actually say yes to
- * (runs the same evaluateTrade fairness check proposeTrade uses, from the
- * AI's own side - it never suggests a deal the AI wouldn't take). Meant to
- * surface as a one-click "Make this trade" list, not something the user has
- * to hunt for manually. Capped at a couple of suggestions per opposing team
- * so the list reads as offers from across the league, not just whichever
- * team happens to come first with a deep bench. When a plain player-for-
- * player swap isn't quite enough for the AI side, sweetens it with one of
- * the user's own cheapest-value owned future picks before giving up on that
- * pairing - same escape hatch a real GM reaches for.
+ * Tries to find a package of the user's players (1 or 2, cheapest-value
+ * first) - optionally with up to 2 owned picks stacked on top as a
+ * sweetener - that the AI side (`theirRoster`) would actually accept in
+ * exchange for `getSet`. Returns the smallest package that works, or null
+ * if nothing tried gets there. This is what lets a suggestion be "2 of your
+ * depth guys" or "1 guy + a pick" instead of always exactly one-for-one.
+ */
+function tryGivePackage(
+  theirRoster: Player[],
+  getSet: Player[],
+  give: Player[],
+  myRoster: Player[],
+  picksAvailable: TradePickRef[],
+  season: number,
+): { give: Player[]; picks: TradePickRef[] } | null {
+  if (!wouldFitUnderCap(myRoster, give.map((p) => p.id), getSet)) return null
+  if (evaluateTrade(theirRoster, getSet, give).accepted) return { give, picks: [] }
+
+  let picks: TradePickRef[] = []
+  let sweetenerValue = 0
+  for (const pick of picksAvailable) {
+    sweetenerValue += pickValue(pick.round, pick.year - season)
+    picks = [...picks, pick]
+    if (evaluateTrade(theirRoster, getSet, give, 0, sweetenerValue).accepted) return { give, picks }
+    if (picks.length >= 2) break // don't sweeten with more than 2 picks
+  }
+  return null
+}
+
+function findAcceptablePackage(
+  theirRoster: Player[],
+  getSet: Player[],
+  giveCandidates: Player[],
+  myRoster: Player[],
+  picksAvailable: TradePickRef[],
+  season: number,
+): { give: Player[]; picks: TradePickRef[] } | null {
+  // Singles: try every surplus player, cheapest-value first, so a modest
+  // depth piece is preferred whenever it's actually enough on its own -
+  // no cap here, a roster is small enough that this is cheap.
+  for (const g of giveCandidates) {
+    const result = tryGivePackage(theirRoster, getSet, [g], myRoster, picksAvailable, season)
+    if (result) return result
+  }
+
+  // Pairs: a single surplus piece alone often isn't enough for a real
+  // upgrade target, so this is where most matches actually get found -
+  // capped to a generous pool (not just the very cheapest) so a
+  // high-value target still has a shot at a package that reaches it.
+  const pool = giveCandidates.slice(0, 25)
+  for (let i = 0; i < pool.length; i++) {
+    for (let j = i + 1; j < pool.length; j++) {
+      const result = tryGivePackage(theirRoster, getSet, [pool[i], pool[j]], myRoster, picksAvailable, season)
+      if (result) return result
+    }
+  }
+  return null
+}
+
+/**
+ * Scans every AI team's roster for a deal that would genuinely upgrade the
+ * user's team (fills a need or clearly beats their current starter at that
+ * spot) and that the AI side would actually say yes to (runs the same
+ * evaluateTrade fairness check proposeTrade uses, from the AI's own side -
+ * it never suggests a deal the AI wouldn't take). Meant to surface as a
+ * one-click "Make this trade" list, not something the user has to hunt for
+ * manually. Capped at a couple of suggestions per opposing team so the list
+ * reads as offers from across the league, not just whichever team happens
+ * to come first with a deep bench.
+ *
+ * Packages aren't limited to one-for-one: findAcceptablePackage tries 1 or
+ * 2 of the user's own players, optionally with up to 2 owned picks stacked
+ * on as a sweetener, and if even that isn't enough for a single target, a
+ * second (lesser) target from the same team gets bundled in too - a real
+ * "throw in a guy to make the numbers work" style package.
  *
  * `seed` shuffles which teams/candidates get looked at first, so calling
  * this again with a different seed (a "refresh" in the UI) surfaces a
@@ -1331,9 +1396,18 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
     list.push(p)
     myByPosition.set(p.position, list)
   }
-  const myPicks = [...ownedPicks(league.tradedPicks, league.season, allTeamIds, league.userTeamId, 5)].sort(
+  const wouldUpgradeMe = (p: Player) => {
+    const myBest = (myByPosition.get(p.position) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+    return myNeeds.has(p.position) || !myBest || p.ratings.overall > myBest.ratings.overall + 4
+  }
+  const myBestAt = (pos: Position) => (myByPosition.get(pos) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+
+  const allMyPicks = [...ownedPicks(league.tradedPicks, league.season, allTeamIds, league.userTeamId, 5)].sort(
     (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
   )
+  const usedGiveIds = new Set<number>()
+  const usedPickKeys = new Set<string>()
+  const pickKey = (r: TradePickRef) => `${r.year}-${r.round}-${r.originalTeamId}`
 
   const maxPerTeam = 2
   const suggestions: SuggestedTrade[] = []
@@ -1349,66 +1423,73 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
       [...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15),
       rng,
     )
+    const usedTheirIds = new Set<number>()
+
     for (const theirs of theirCandidates) {
       if (suggestions.length >= limit || addedForTeam >= maxPerTeam) break
-      const myBest = (myByPosition.get(theirs.position) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
-      const wouldUpgrade = myNeeds.has(theirs.position) || !myBest || theirs.ratings.overall > myBest.ratings.overall + 4
-      if (!wouldUpgrade) continue
+      if (usedTheirIds.has(theirs.id)) continue
+      if (!wouldUpgradeMe(theirs)) continue
       // Skip deals the AI would take but that would leave them thin at a
       // position they actually need - not realistic even if "fair" by value.
       if (theirNeeds.has(theirs.position)) continue
 
+      const myBest = myBestAt(theirs.position)
+
       // Offer from my own surplus - positions I'm not short on, cheapest
       // players first so the ask stays modest - skipping anything I'd need
-      // more than I need the upgrade itself.
+      // more than I need the upgrade itself, and anything already promised
+      // to an earlier suggestion in this same list.
       const mySurplus = myRoster
-        .filter((p) => p.id !== myBest?.id && !myNeeds.has(p.position))
+        .filter((p) => p.id !== myBest?.id && !myNeeds.has(p.position) && !usedGiveIds.has(p.id))
         .sort((a, b) => playerValue(a) - playerValue(b))
+      const picksAvailable = allMyPicks.filter((r) => !usedPickKeys.has(pickKey(r)))
 
-      for (const give of mySurplus) {
-        if (!wouldFitUnderCap(myRoster, [give.id], [theirs])) continue
+      let getSet = [theirs]
+      let result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season)
 
-        const plain = evaluateTrade(theirRoster, [theirs], [give])
-        let givePicks: TradePickRef[] = []
-        let accepted = plain.accepted
-
-        if (!accepted) {
-          // Try sweetening with owned picks, cheapest-value first, adding
-          // one more at a time until the AI side would actually take it.
-          let sweetenerValue = 0
-          for (const pick of myPicks) {
-            if (givePicks.some((p) => p.year === pick.year && p.round === pick.round)) continue
-            sweetenerValue += pickValue(pick.round, pick.year - league.season)
-            givePicks = [...givePicks, pick]
-            if (evaluateTrade(theirRoster, [theirs], [give], 0, sweetenerValue).accepted) {
-              accepted = true
-              break
-            }
-            if (givePicks.length >= 2) break // don't sweeten with more than 2 picks
-          }
-          if (!accepted) givePicks = []
+      let bundledSecond: Player | null = null
+      if (!result) {
+        // A single-target package didn't work - see if bundling a second,
+        // lesser target from the same team (also an upgrade, also not
+        // needed by them) makes the numbers work as a 2-for-something deal.
+        bundledSecond =
+          theirCandidates.find(
+            (c) =>
+              c.id !== theirs.id &&
+              !usedTheirIds.has(c.id) &&
+              !theirNeeds.has(c.position) &&
+              wouldUpgradeMe(c),
+          ) ?? null
+        if (bundledSecond) {
+          getSet = [theirs, bundledSecond]
+          result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season)
         }
-
-        if (!accepted) continue
-
-        suggestions.push({
-          otherTeamId: team.id,
-          give: toSuggestedTradePlayer(give),
-          get: toSuggestedTradePlayer(theirs),
-          giveIds: [give.id],
-          getIds: [theirs.id],
-          givePicks,
-          reason:
-            (myNeeds.has(theirs.position)
-              ? `Fills your need at ${theirs.position}`
-              : `Upgrade at ${theirs.position} (${theirs.ratings.overall} OVR vs your ${myBest?.ratings.overall ?? 0})`) +
-            (givePicks.length > 0
-              ? ` · needs ${givePicks.length > 1 ? 'picks' : 'a pick'} added to close the gap`
-              : ''),
-        })
-        addedForTeam++
-        break
       }
+
+      if (!result) continue
+
+      const reasonFor = (p: Player) => {
+        const best = myBestAt(p.position)
+        return myNeeds.has(p.position)
+          ? `Fills your need at ${p.position}`
+          : `Upgrade at ${p.position} (${p.ratings.overall} OVR vs your ${best?.ratings.overall ?? 0})`
+      }
+
+      suggestions.push({
+        otherTeamId: team.id,
+        give: result.give.map(toSuggestedTradePlayer),
+        get: getSet.map(toSuggestedTradePlayer),
+        giveIds: result.give.map((p) => p.id),
+        getIds: getSet.map((p) => p.id),
+        givePicks: result.picks,
+        reason:
+          [reasonFor(theirs), bundledSecond ? reasonFor(bundledSecond) : null].filter(Boolean).join(' + ') +
+          (result.picks.length > 0 ? ` · needs ${result.picks.length > 1 ? 'picks' : 'a pick'} added to close the gap` : ''),
+      })
+      result.give.forEach((p) => usedGiveIds.add(p.id))
+      result.picks.forEach((r) => usedPickKeys.add(pickKey(r)))
+      getSet.forEach((p) => usedTheirIds.add(p.id))
+      addedForTeam++
     }
   }
 
