@@ -390,6 +390,18 @@ function overallColor(n: number) {
   return 'text-orange-400'
 }
 
+/**
+ * A card background tint for a depth-chart list - the better the player
+ * relative to others at their position, the lighter the card, so scanning
+ * down a position group reads as a visible gradient (top = brightest) on
+ * mobile instead of every card looking identically flat. `min`/`max` are
+ * the group's own overall range so this is relative, not an absolute scale.
+ */
+function depthShade(overall: number, min: number, max: number): { backgroundColor: string } {
+  const t = max > min ? (overall - min) / (max - min) : 0.5
+  return { backgroundColor: `rgba(148, 163, 184, ${(0.03 + t * 0.14).toFixed(3)})` }
+}
+
 /** Short column-header abbreviation for a position attribute label, e.g. "Route Running" -> "RR", "Speed" -> "SPD". */
 function abbrevLabel(label: string) {
   const words = label.split(' ')
@@ -731,6 +743,8 @@ function RosterView({
         const positionOverall = Math.round(computePositionOverall(players))
         const attrLabels = POSITION_ATTRIBUTES[pos]
         const starterCount = Math.min(STARTER_COUNTS[pos] ?? 1, players.length)
+        const groupMin = Math.min(...players.map((p) => p.ratings.overall))
+        const groupMax = Math.max(...players.map((p) => p.ratings.overall))
         return (
           <div key={pos} className="mb-6">
             <div className="flex flex-col sm:flex-row sm:items-baseline gap-0.5 sm:gap-2 mb-2">
@@ -749,7 +763,11 @@ function RosterView({
               {players.map((p, i) => {
                 const isStarter = i < starterCount
                 return (
-                  <div key={p.id} className="border border-slate-800 rounded-md p-2 text-xs">
+                  <div
+                    key={p.id}
+                    className="border border-slate-800 rounded-md p-2 text-xs"
+                    style={depthShade(p.ratings.overall, groupMin, groupMax)}
+                  >
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span
@@ -813,14 +831,6 @@ function RosterView({
                     {editable && (
                       <div className="flex gap-2 mt-1.5">
                         <button
-                          onClick={() => toggleTradeBlock(p.id)}
-                          className={`px-2 py-0.5 border rounded text-[10px] ${
-                            p.onTradeBlock ? 'border-blue-600 text-blue-300' : 'text-gray-500'
-                          }`}
-                        >
-                          {p.onTradeBlock ? 'Blocked' : 'Block'}
-                        </button>
-                        <button
                           onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
                           disabled={cuttingId === p.id}
                           className="px-2 py-0.5 border border-red-800 text-red-400 rounded text-[10px] disabled:opacity-30"
@@ -861,6 +871,7 @@ function RosterView({
                     <tr
                       key={p.id}
                       className={`border-b ${i === starterCount ? 'border-t-2 border-t-gray-600' : ''}`}
+                      style={depthShade(p.ratings.overall, groupMin, groupMax)}
                     >
                       {editable && (
                         <td className="py-1 pr-2">
@@ -929,15 +940,6 @@ function RosterView({
                       {editable && (
                         <td className="py-1 pl-4 text-right whitespace-nowrap">
                           <button
-                            onClick={() => toggleTradeBlock(p.id)}
-                            className={`px-2 py-0.5 border rounded text-[10px] mr-1 ${
-                              p.onTradeBlock ? 'border-blue-600 text-blue-300' : 'text-gray-500'
-                            }`}
-                            title="Flag this player as available in trade talks - AI teams may send offers for blocked players"
-                          >
-                            {p.onTradeBlock ? 'Blocked' : 'Block'}
-                          </button>
-                          <button
                             onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
                             disabled={cuttingId === p.id}
                             className="px-2 py-0.5 border border-red-800 text-red-400 rounded text-[10px] disabled:opacity-30"
@@ -982,6 +984,7 @@ function GameReportView({
   season: number
   teamName: (id: number) => string
 }) {
+  const league = useLiveQuery(() => db.leagues.get(leagueId), [leagueId])
   const games = useLiveQuery(
     () =>
       db.games
@@ -992,7 +995,7 @@ function GameReportView({
     [leagueId, season, userTeamId],
   )
   const roster = useLiveQuery(() => db.players.where('teamId').equals(userTeamId).toArray(), [userTeamId])
-  const [selectedGameId, setSelectedGameId] = useState<number | null>(null)
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
 
   const sortedGames = games
     ? [...games].sort((a, b) => {
@@ -1000,7 +1003,30 @@ function GameReportView({
         return rank(b) - rank(a)
       })
     : []
-  const selectedGame = sortedGames.find((g) => g.id === selectedGameId) ?? sortedGames[0] ?? null
+
+  // A bye week never produces a game row at all, so without this a user who
+  // sims through one just silently keeps seeing their last real game with no
+  // indication anything different happened this week. Any regular-season
+  // week up through the last one that's actually been simmed, with no game
+  // of this team's own in it, was a bye.
+  const maxSimmedRegularWeek =
+    league == null ? 0 : league.phase === 'regular' ? Math.max(0, league.week - 1) : (league.regularSeasonWeeks ?? 0)
+  const playedWeeks = new Set(sortedGames.filter((g) => g.round === undefined).map((g) => g.week))
+  const byeWeeks: number[] = []
+  for (let w = 1; w <= maxSimmedRegularWeek; w++) {
+    if (!playedWeeks.has(w)) byeWeeks.push(w)
+  }
+
+  type ReportEntry =
+    | { kind: 'game'; key: string; week: number; game: GameResult }
+    | { kind: 'bye'; key: string; week: number }
+  const entries: ReportEntry[] = [
+    ...sortedGames.map((g): ReportEntry => ({ kind: 'game', key: `game-${g.id}`, week: g.round ? 1000 + ROUND_ORDER.indexOf(g.round) : g.week, game: g })),
+    ...byeWeeks.map((w): ReportEntry => ({ kind: 'bye', key: `bye-${w}`, week: w })),
+  ].sort((a, b) => b.week - a.week)
+
+  const selectedEntry = entries.find((e) => e.key === selectedKey) ?? entries[0] ?? null
+  const selectedGame = selectedEntry?.kind === 'game' ? selectedEntry.game : null
 
   // playerGameStats only indexes [leagueId+season] and playerId (see db's
   // schema comment) - gameId/teamId are filtered in memory from that
@@ -1026,10 +1052,60 @@ function GameReportView({
     [selectedGame?.id, seasonStats],
   )
 
-  if (!games || !roster || !seasonStats || !boxScorePlayers) {
+  if (!games || !roster || !seasonStats || !boxScorePlayers || !league) {
     return <p className="text-sm text-gray-500">Loading game report...</p>
   }
-  if (sortedGames.length === 0 || !selectedGame) {
+  if (entries.length === 0 || !selectedEntry) {
+    return <p className="text-sm text-gray-500">No games played yet this season.</p>
+  }
+
+  const entrySelector = (
+    <select
+      className="border rounded text-sm px-2 py-1 bg-transparent"
+      value={selectedEntry.key}
+      onChange={(e) => setSelectedKey(e.target.value)}
+    >
+      {entries.map((e) => {
+        if (e.kind === 'bye') {
+          return (
+            <option key={e.key} value={e.key} className="text-black">
+              Week {e.week} - BYE
+            </option>
+          )
+        }
+        const g = e.game
+        const gIsHome = g.homeTeamId === userTeamId
+        const gMy = gIsHome ? g.homeScore : g.awayScore
+        const gOpp = gIsHome ? g.awayScore : g.homeScore
+        const gOppId = gIsHome ? g.awayTeamId : g.homeTeamId
+        const label = g.round ? g.round[0].toUpperCase() + g.round.slice(1) : `Week ${g.week}`
+        const result = gMy > gOpp ? 'W' : gMy < gOpp ? 'L' : 'T'
+        return (
+          <option key={e.key} value={e.key} className="text-black">
+            {label} - {result} {gMy}-{gOpp} vs {teamName(gOppId)}
+          </option>
+        )
+      })}
+    </select>
+  )
+
+  if (selectedEntry.kind === 'bye') {
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          {entrySelector}
+          <p className="text-sm text-gray-500">
+            Week {selectedEntry.week} &middot; <span className="text-gray-300 font-semibold">BYE</span>
+          </p>
+        </div>
+        <p className="text-sm text-gray-400 border rounded p-3">
+          {teamName(userTeamId)} had a bye in week {selectedEntry.week} - no game was played, nothing to report.
+        </p>
+      </div>
+    )
+  }
+
+  if (!selectedGame) {
     return <p className="text-sm text-gray-500">No games played yet this season.</p>
   }
 
@@ -1104,25 +1180,7 @@ function GameReportView({
   return (
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <select
-          className="border rounded text-sm px-2 py-1 bg-transparent"
-          value={selectedGame.id}
-          onChange={(e) => setSelectedGameId(Number(e.target.value))}
-        >
-          {sortedGames.map((g) => {
-            const gIsHome = g.homeTeamId === userTeamId
-            const gMy = gIsHome ? g.homeScore : g.awayScore
-            const gOpp = gIsHome ? g.awayScore : g.homeScore
-            const gOppId = gIsHome ? g.awayTeamId : g.homeTeamId
-            const label = g.round ? g.round[0].toUpperCase() + g.round.slice(1) : `Week ${g.week}`
-            const result = gMy > gOpp ? 'W' : gMy < gOpp ? 'L' : 'T'
-            return (
-              <option key={g.id} value={g.id} className="text-black">
-                {label} - {result} {gMy}-{gOpp} vs {teamName(gOppId)}
-              </option>
-            )
-          })}
-        </select>
+        {entrySelector}
         <p className="text-sm text-gray-500">
           {roundLabel} &middot;{' '}
           <span className={won ? 'text-green-400 font-semibold' : tied ? 'text-gray-300' : 'text-red-400 font-semibold'}>
@@ -1181,29 +1239,7 @@ function GameReportView({
         </div>
       )}
 
-      <div className="mb-6">
-        <h3 className="text-sm font-semibold text-gray-500 mb-2">Box Score</h3>
-        <p className="text-xs text-gray-600 mb-2">
-          Every player who recorded a stat this game, graded against their position peers league-wide for this same
-          week - not just the standout performances above.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <BoxScoreTable
-            title={teamName(userTeamId)}
-            stats={statsForGame.filter((s) => s.teamId === userTeamId)}
-            playerById={boxScorePlayerById}
-            grades={weekGrades}
-          />
-          <BoxScoreTable
-            title={teamName(oppTeamId)}
-            stats={statsForGame.filter((s) => s.teamId === oppTeamId)}
-            playerById={boxScorePlayerById}
-            grades={weekGrades}
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div>
           <h3 className="text-sm font-semibold text-green-400 mb-2">Played Well</h3>
           {goodPerformers.length === 0 && <p className="text-xs text-gray-600">No standout performances this game.</p>}
@@ -1236,7 +1272,29 @@ function GameReportView({
         </div>
       </div>
 
-      <div className="mt-6 border rounded p-3">
+      <div className="mb-6">
+        <h3 className="text-sm font-semibold text-gray-500 mb-2">Box Score</h3>
+        <p className="text-xs text-gray-600 mb-2">
+          Every player who recorded a stat this game, graded against their position peers league-wide for this same
+          week - not just the standout performances above.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <BoxScoreTable
+            title={teamName(userTeamId)}
+            stats={statsForGame.filter((s) => s.teamId === userTeamId)}
+            playerById={boxScorePlayerById}
+            grades={weekGrades}
+          />
+          <BoxScoreTable
+            title={teamName(oppTeamId)}
+            stats={statsForGame.filter((s) => s.teamId === oppTeamId)}
+            playerById={boxScorePlayerById}
+            grades={weekGrades}
+          />
+        </div>
+      </div>
+
+      <div className="border rounded p-3">
         <h3 className="text-sm font-semibold text-gray-500 mb-2">Season Trends - Where to Upgrade</h3>
         <p className="text-xs text-gray-600 mb-2">
           Positions with more bad games than good ones across the {sortedGames.length} game(s) played so far this season - a
@@ -2832,11 +2890,13 @@ function StandingsTable({
   regularGames,
   teamName,
   userTeamId,
+  teamOverallFor,
 }: {
   teams: Team[]
   regularGames: GameResult[]
   teamName: (id: number) => string
   userTeamId: number | null
+  teamOverallFor: (id: number) => number | null
 }) {
   return (
     <>
@@ -2862,17 +2922,23 @@ function StandingsTable({
                       </tr>
                     </thead>
                     <tbody>
-                      {standings.map((row) => (
+                      {standings.map((row) => {
+                        const ovr = teamOverallFor(row.teamId)
+                        return (
                         <tr
                           key={row.teamId}
                           className={`border-b ${userRowClass(row.teamId, userTeamId)}`}
                         >
-                          <td className="py-1 pl-1">{teamName(row.teamId)}</td>
+                          <td className="py-1 pl-1">
+                            {teamName(row.teamId)}
+                            {ovr != null && <span className={`ml-1.5 text-[10px] ${overallColor(ovr)}`}>{ovr} OVR</span>}
+                          </td>
                           <td className="py-1 text-right w-8 text-emerald-400 font-semibold">{row.wins}</td>
                           <td className="py-1 text-right w-8 text-red-400 font-semibold">{row.losses}</td>
                           <td className="py-1 text-right w-8 text-gray-400">{row.ties}</td>
                         </tr>
-                      ))}
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -2891,12 +2957,14 @@ function PlayoffPictureView({
   playoffGamesByRound,
   userTeamId,
   teamName,
+  teamOverallFor,
 }: {
   teams: Team[]
   regularGames: GameResult[]
   playoffGamesByRound: Map<PlayoffRound, GameResult[]>
   userTeamId: number | null
   teamName: (id: number) => string
+  teamOverallFor: (id: number) => number | null
 }) {
   const seedsByConf: Record<Conference, ReturnType<typeof computeConferenceSeeds>> = {
     AFC: computeConferenceSeeds(teams, regularGames, 'AFC'),
@@ -2929,6 +2997,10 @@ function PlayoffPictureView({
                     <td className="py-1 pl-1 w-6 text-cyan-400 font-semibold">{s.seed}</td>
                     <td className="py-1">
                       {teamName(s.teamId)}
+                      {(() => {
+                        const ovr = teamOverallFor(s.teamId)
+                        return ovr != null && <span className={`ml-1.5 text-[10px] ${overallColor(ovr)}`}>{ovr} OVR</span>
+                      })()}
                       {s.divisionWinner && <span className="text-amber-400 text-xs"> (div)</span>}
                     </td>
                     <td className="py-1 text-right w-16 whitespace-nowrap">
@@ -2974,6 +3046,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
       league?.userTeamId != null ? db.players.where('teamId').equals(league.userTeamId).toArray() : Promise.resolve([]),
     [league?.userTeamId],
   )
+  const allPlayers = useLiveQuery(() => db.players.toArray(), [])
   const [simming, setSimming] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advancing, setAdvancing] = useState(false)
@@ -2987,6 +3060,18 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const teamName = (id: number) => {
     const t = teams?.find((t) => t.id === id)
     return t ? `${t.region} ${t.name}` : `Team ${id}`
+  }
+
+  const rosterByTeam = new Map<number, Player[]>()
+  for (const p of allPlayers ?? []) {
+    if (p.teamId == null) continue
+    const list = rosterByTeam.get(p.teamId) ?? []
+    list.push(p)
+    rosterByTeam.set(p.teamId, list)
+  }
+  const teamOverallFor = (id: number): number | null => {
+    const roster = rosterByTeam.get(id)
+    return roster && roster.length > 0 ? Math.round(computeTeamOverall(roster)) : null
   }
 
   const handleSimWeek = async () => {
@@ -3247,6 +3332,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
                   playoffGamesByRound={playoffGamesByRound}
                   userTeamId={league.userTeamId}
                   teamName={teamName}
+                  teamOverallFor={teamOverallFor}
                 />
               ) : (
                 <>
@@ -3256,6 +3342,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
                     regularGames={regularGames}
                     teamName={teamName}
                     userTeamId={league.userTeamId}
+                    teamOverallFor={teamOverallFor}
                   />
                 </>
               )}
