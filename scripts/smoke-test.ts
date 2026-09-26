@@ -1097,6 +1097,36 @@ async function main() {
   await simWeek(leagueId) // week 1 - must succeed now that the roster is legal
   console.log('OK: simWeek kicks off week 1 successfully once the roster is legal')
 
+  // computeCapSpace must never clamp to 0 - a roster that's over the cap
+  // (easy to end up with right after a draft that added 7 more mouths to
+  // feed) should show negative cap space, and cutting a player should move
+  // that number even while still over, not just once back under.
+  await (async () => {
+    const userTeamId = leagueAfterOffseason.userTeamId!
+    let roster = await db.players.where('teamId').equals(userTeamId).toArray()
+    // Bump every remaining player's salary so the roster is definitely over
+    // the cap, regardless of what this run's random rookie salaries added up to.
+    await db.players.bulkPut(
+      roster.map((p) => ({ ...p, contract: { salary: 5_000_000, yearsLeft: p.contract?.yearsLeft ?? 1 } })) as never[],
+    )
+    roster = await db.players.where('teamId').equals(userTeamId).toArray()
+    const capBefore = computeCapSpace(roster)
+    if (capBefore >= 0) throw new Error(`Expected the padded-salary roster to be over the cap, got capSpace=${capBefore}`)
+
+    const cutCandidate = [...roster].sort((a, b) => a.ratings.overall - b.ratings.overall)[0]
+    await cutPlayer(leagueId, cutCandidate.id)
+    const rosterAfterCut = await db.players.where('teamId').equals(userTeamId).toArray()
+    const capAfter = computeCapSpace(rosterAfterCut)
+    if (capAfter >= 0) throw new Error(`Expected to still be over the cap after cutting just one of many, got capSpace=${capAfter}`)
+    if (capAfter <= capBefore) {
+      throw new Error(`Cutting a player while over the cap should free up cap space (less negative) - before=${capBefore}, after=${capAfter}`)
+    }
+    if (capAfter - capBefore !== 5_000_000) {
+      throw new Error(`Expected cap space to move by exactly the cut player's salary (5,000,000) - moved by ${capAfter - capBefore}`)
+    }
+    console.log(`OK: computeCapSpace stays negative (not clamped to 0) while over the cap and moves correctly on a cut: ${capBefore} -> ${capAfter}`)
+  })()
+
   // Mid-season roster moves: sim a few weeks in, cut a bench player off the
   // user's own team, and confirm they land back in the free agent pool and
   // can be replaced by signing someone else - without needing to wait for

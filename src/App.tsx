@@ -37,6 +37,7 @@ import {
   computeTeamOverall,
   MIN_ROSTER_SIZE,
   POSITION_ATTRIBUTES,
+  ROSTER_SHAPE,
   rosterNeeds,
   STARTER_COUNTS,
 } from './engine/players'
@@ -162,11 +163,14 @@ function TeamPositionPanel({
   }
   const summary = POSITION_ORDER.map((pos) => {
     const group = (byPosition.get(pos) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)
+    const target = ROSTER_SHAPE[pos]
     return {
       pos,
       group,
+      target,
       positionOverall: group.length > 0 ? Math.round(computePositionOverall(group)) : 0,
       isNeed: needs.includes(pos),
+      isOver: group.length > target,
     }
   })
 
@@ -193,68 +197,103 @@ function TeamPositionPanel({
             key={s.pos}
             onClick={() => setExpanded(expanded === s.pos ? null : s.pos)}
             className={`rounded border px-2 py-1.5 text-center ${
-              s.isNeed ? 'border-amber-700 bg-amber-900/20' : 'border-gray-700'
+              s.isOver
+                ? 'border-red-600 border-dashed bg-red-900/10'
+                : s.isNeed
+                  ? 'border-amber-700 bg-amber-900/20'
+                  : 'border-gray-700'
             } ${expanded === s.pos ? 'ring-1 ring-blue-400' : ''}`}
-            title={`Top: ${s.group[0] ? `${s.group[0].firstName} ${s.group[0].lastName} (${s.group[0].ratings.overall})` : 'none'}`}
+            title={`Top: ${s.group[0] ? `${s.group[0].firstName} ${s.group[0].lastName} (${s.group[0].ratings.overall})` : 'none'}${
+              s.isOver ? ` - carrying ${s.group.length}, only need ${s.target}` : ''
+            }`}
           >
             <div className="text-[10px] text-gray-500">{s.pos}</div>
             <div className="text-sm font-semibold text-green-400">{s.positionOverall || '-'}</div>
+            <div className={`text-[10px] ${s.isOver ? 'text-red-400 font-semibold' : s.isNeed ? 'text-amber-400' : 'text-gray-600'}`}>
+              {s.group.length}/{s.target}
+            </div>
           </button>
         ))}
       </div>
       <p className="text-xs text-gray-600 mt-1">
-        Position overall reflects your starters, not a flat roster average. Amber = a position you currently need.
-        Click a position to see/cut individual players and filter the list below to just that position.
+        Position overall reflects your starters, not a flat roster average. Each tile also shows how many you have vs.
+        the target for that spot (e.g. 12/10) - <span className="text-amber-400">amber</span> means you're under and
+        it's a need, <span className="text-red-400">red dashed</span> means you're carrying more than you need there
+        and could free up cap space/a roster spot by cutting the weakest one. Click a position to see/cut individual
+        players and filter the list below to just that position.
       </p>
       {expanded && (
         <div className="mt-2 border rounded p-2 overflow-x-auto">
-          <table className="text-sm border-collapse w-full">
-            <thead>
-              <tr className="text-left text-gray-400 border-b">
-                <th className="py-1 pr-4">Name</th>
-                <th className="py-1 pr-4 text-right">Age</th>
-                <th className="py-1 pr-4 text-right">OVR</th>
-                <th className="py-1 pr-4 text-right">POT</th>
-                <th className="py-1 pr-4 text-right">Salary</th>
-                <th className="py-1"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(byPosition.get(expanded) ?? []).length === 0 && (
-                <tr>
-                  <td colSpan={6} className="py-1 text-gray-500">
-                    No players at this position.
-                  </td>
-                </tr>
-              )}
-              {(byPosition.get(expanded) ?? [])
-                .slice()
-                .sort((a, b) => b.ratings.overall - a.ratings.overall)
-                .map((p) => (
-                  <tr key={p.id} className="border-b">
-                    <td className="py-1 pr-4 whitespace-nowrap">
-                      {p.firstName} {p.lastName}
-                    </td>
-                    <td className="py-1 pr-4 text-right">{p.age}</td>
-                    <td className={`py-1 pr-4 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
-                    <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
-                    <td className="py-1 pr-4 text-right whitespace-nowrap">
-                      {p.contract ? formatMoney(p.contract.salary) : '-'}
-                    </td>
-                    <td className="py-1 text-right">
-                      <button
-                        onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
-                        disabled={cuttingId === p.id}
-                        className="px-2 py-0.5 border border-red-800 text-red-400 rounded text-[10px] disabled:opacity-30"
-                        title="Cut this player and make them a free agent"
-                      >
-                        Cut
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+          {(() => {
+            const positionPlayers = (byPosition.get(expanded) ?? []).slice().sort((a, b) => a.depthOrder - b.depthOrder)
+            const target = ROSTER_SHAPE[expanded]
+            const starterCount = Math.min(STARTER_COUNTS[expanded] ?? 1, positionPlayers.length)
+            const over = positionPlayers.length > target
+            return (
+              <>
+                <p className="text-xs mb-2">
+                  <span className={over ? 'text-red-400 font-semibold' : 'text-gray-400'}>
+                    {positionPlayers.length}/{target}
+                  </span>{' '}
+                  {over && <span className="text-red-400">- {positionPlayers.length - target} more than you need here.</span>}
+                </p>
+                <table className="text-sm border-collapse w-full">
+                  <thead>
+                    <tr className="text-left text-gray-400 border-b">
+                      <th className="py-1 pr-2 w-16">Status</th>
+                      <th className="py-1 pr-4">Name</th>
+                      <th className="py-1 pr-4 text-right">Age</th>
+                      <th className="py-1 pr-4 text-right">OVR</th>
+                      <th className="py-1 pr-4 text-right">POT</th>
+                      <th className="py-1 pr-4 text-right">Salary</th>
+                      <th className="py-1"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {positionPlayers.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-1 text-gray-500">
+                          No players at this position.
+                        </td>
+                      </tr>
+                    )}
+                    {positionPlayers.map((p, i) => (
+                      <tr key={p.id} className={`border-b ${i === starterCount ? 'border-t-2 border-t-gray-600' : ''}`}>
+                        <td className="py-1 pr-2">
+                          <span
+                            className={`text-[9px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${
+                              i < starterCount ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-300'
+                            }`}
+                          >
+                            {i < starterCount ? 'STARTER' : 'BENCH'}
+                          </span>
+                        </td>
+                        <td className="py-1 pr-4 whitespace-nowrap">
+                          {p.firstName} {p.lastName}
+                        </td>
+                        <td className="py-1 pr-4 text-right">{p.age}</td>
+                        <td className={`py-1 pr-4 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
+                        <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
+                        <td className="py-1 pr-4 text-right whitespace-nowrap">
+                          {p.contract ? formatMoney(p.contract.salary) : '-'}
+                        </td>
+                        <td className="py-1 text-right">
+                          <button
+                            onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
+                            disabled={cuttingId === p.id}
+                            className="px-2 py-0.5 border border-red-800 text-red-400 rounded text-[10px] disabled:opacity-30"
+                            title="Cut this player and make them a free agent"
+                          >
+                            Cut
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )
+          })()}
         </div>
       )}
     </div>
@@ -286,7 +325,8 @@ function sortRows<T>(
 }
 
 function formatMoney(n: number) {
-  return `$${(n / 1_000_000).toFixed(1)}M`
+  const sign = n < 0 ? '-' : ''
+  return `${sign}$${(Math.abs(n) / 1_000_000).toFixed(1)}M`
 }
 
 /** One button in the main League/Roster/Trade/... tab bar - an icon, a label, and an optional numeric badge (used for pending trade offers). */
@@ -641,7 +681,9 @@ function RosterView({
         <p className="text-sm text-gray-500">
           {roster.length} players &middot; Team overall {teamOverall} &middot;{' '}
           <InfoTip label="Cap space" tip="How much salary you can still add this season before hitting the league salary cap." />{' '}
-          {formatMoney(computeCapSpace(roster))}
+          <span className={computeCapSpace(roster) < 0 ? 'text-red-400 font-semibold' : ''}>
+            {formatMoney(computeCapSpace(roster))}
+          </span>
           {roster.some((p) => p.injury) && (
             <> &middot; {roster.filter((p) => p.injury).length} injured</>
           )}
@@ -2344,7 +2386,7 @@ function FreeAgencyView({
             {roster.length}/{MIN_ROSTER_SIZE}
           </span>{' '}
           &middot; <InfoTip label="Cap space" tip="How much salary you can still add before hitting the league salary cap." />{' '}
-          {formatMoney(capSpace)} &middot;{' '}
+          <span className={capSpace < 0 ? 'text-red-400 font-semibold' : ''}>{formatMoney(capSpace)}</span> &middot;{' '}
           <InfoTip label="Needs" tip="Positions below your target roster count at that spot - these are the safest signs to make." />:{' '}
           {needs.length > 0 ? [...new Set(needs)].join(', ') : 'roster full'}
         </p>

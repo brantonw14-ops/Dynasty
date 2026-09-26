@@ -5,9 +5,18 @@ import { marketSalary } from './salary'
 import { SALARY_CAP } from './teams'
 
 /** Remaining budget to spend this offseason: full cap minus rostered salaries. */
+/**
+ * Cap space can go negative - a roster carrying way more than 53 players
+ * (or one that just hasn't cut down yet) can genuinely owe more in salary
+ * than the cap allows. Clamping this to 0 used to hide that: every player
+ * still commits their salary against the cap regardless of roster size, so
+ * cutting one should always move this number, even while still over the
+ * cap. Every call site treats "not enough cap space" as salary > capSpace,
+ * which still works correctly when capSpace is negative.
+ */
 export function computeCapSpace(roster: Player[]) {
   const committed = roster.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
-  return Math.max(0, SALARY_CAP - committed)
+  return SALARY_CAP - committed
 }
 
 function estimateSalary(rng: Rng, position: Position, overall: number, age: number) {
