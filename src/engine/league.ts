@@ -1122,11 +1122,13 @@ export async function toggleTradeBlock(playerId: number) {
 
 /**
  * Looks at the user's trade-block players and, with some randomness, has
- * one AI team put together an offer for one of them - a player (and
- * sometimes a sweetener pick) the AI team can actually afford/use, sized so
- * the deal is at least fair value for the user (this is meant to read as
- * "someone wants your guy," not a lowball). Skips entirely if there's
- * nothing on the block or too many offers are already pending.
+ * one AI team put together an offer for one of them (sometimes two, if the
+ * AI also wants a second, lesser player off the user's roster to round out
+ * the deal) - a player package (and sometimes a sweetener pick) the AI team
+ * can actually afford/use, sized so the deal is at least fair value for the
+ * user (this is meant to read as "someone wants your guys," not a lowball).
+ * Skips entirely if there's nothing on the block or too many offers are
+ * already pending.
  */
 export async function generateTradeOffers(leagueId: number) {
   const league = await db.leagues.get(leagueId)
@@ -1147,7 +1149,7 @@ export async function generateTradeOffers(leagueId: number) {
   const offerChance = blockPlayers.length > 0 ? 0.5 : 0.3
   if (rng() > offerChance) return // not every week produces an offer
 
-  const alreadyOffered = new Set(pending.map((o) => o.requestPlayerIds[0]))
+  const alreadyOffered = new Set(pending.flatMap((o) => o.requestPlayerIds))
   const eligible = candidatePool.filter((p) => !alreadyOffered.has(p.id))
   const target = eligible[Math.floor(rng() * eligible.length)]
   if (!target) return
@@ -1170,12 +1172,24 @@ export async function generateTradeOffers(leagueId: number) {
   const wouldUpgrade = !currentBestAtPosition || target.ratings.overall > currentBestAtPosition.ratings.overall + 3
   if (!needs.has(target.position) && !wouldUpgrade) return
 
-  const targetValue = playerValue(target)
   const capSpace = computeCapSpace(fromRoster)
   if ((target.contract?.salary ?? 0) > capSpace) return // can't actually afford the contract
 
+  // Sometimes the AI wants a second, lesser piece off the user's roster too
+  // (a throw-in at a position it's actually short on) rather than every
+  // offer being strictly one-for-something - real trades aren't always
+  // 1-for-1 either.
+  const requestTargets = [target]
+  if (rng() < 0.4) {
+    const secondCandidate = candidatePool.find(
+      (p) => p.id !== target.id && !alreadyOffered.has(p.id) && needs.has(p.position) && (p.contract?.salary ?? 0) <= capSpace,
+    )
+    if (secondCandidate) requestTargets.push(secondCandidate)
+  }
+  const requestValue = requestTargets.reduce((sum, p) => sum + playerValue(p), 0)
+
   // Build a "give" package from the offering team's own surplus (positions
-  // they're not short on), aiming to clear the target's value with a
+  // they're not short on), aiming to clear the requested value with a
   // little extra so it reads as a good offer for the user.
   const fromNeeds = new Set(needs)
   const surplus = fromRoster
@@ -1185,34 +1199,34 @@ export async function generateTradeOffers(leagueId: number) {
   const offerPlayers: Player[] = []
   let offerValue = 0
   for (const p of surplus) {
-    if (offerValue >= targetValue * 1.1) break
+    if (offerValue >= requestValue * 1.1) break
     offerPlayers.push(p)
     offerValue += playerValue(p)
     if (offerPlayers.length >= 2) break
   }
 
   let offerPicks: TradePickRef[] = []
-  if (offerValue < targetValue) {
+  if (offerValue < requestValue) {
     const picks = ownedPicks(league.tradedPicks, league.season, allTeamIds, fromTeamId, 3).sort(
       (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
     )
     for (const ref of picks) {
       const v = pickValue(ref.round, ref.year - league.season)
-      if (offerValue >= targetValue) break
+      if (offerValue >= requestValue) break
       offerPicks.push(ref)
       offerValue += v
       if (offerPicks.length >= 2) break
     }
   }
 
-  if (offerValue < targetValue * 0.9 || (offerPlayers.length === 0 && offerPicks.length === 0)) return
+  if (offerValue < requestValue * 0.9 || (offerPlayers.length === 0 && offerPicks.length === 0)) return
 
   const offer: PendingTradeOffer = {
     id: league.nextTradeOfferId ?? 1,
     fromTeamId,
     offerPlayerIds: offerPlayers.map((p) => p.id),
     offerPicks,
-    requestPlayerIds: [target.id],
+    requestPlayerIds: requestTargets.map((p) => p.id),
     requestPicks: [],
   }
 

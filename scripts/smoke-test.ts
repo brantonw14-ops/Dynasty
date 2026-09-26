@@ -538,13 +538,18 @@ async function main() {
     // season sim below).
     const originalWeek = startLeague.week
     let offer = null
+    let sawMultiPlayerRequest = false
     for (let i = 0; i < 20 && !offer; i++) {
       await db.leagues.update(leagueId, { week: originalWeek + i })
       await generateTradeOffers(leagueId)
       const withOffers = await db.leagues.get(leagueId)
+      for (const o of withOffers?.pendingTradeOffers ?? []) {
+        if (o.requestPlayerIds.length > 1) sawMultiPlayerRequest = true
+      }
       offer = (withOffers?.pendingTradeOffers ?? [])[0] ?? null
     }
     await db.leagues.update(leagueId, { week: originalWeek })
+    console.log(`generateTradeOffers: multi-player request seen across retries = ${sawMultiPlayerRequest}`)
     if (!offer) {
       console.log('OK: no AI trade offer materialized in 20 tries (position/cap/need mismatch) - skipping accept check')
     } else {

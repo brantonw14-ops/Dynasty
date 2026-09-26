@@ -1360,6 +1360,99 @@ interface TradeCardPlayer {
   isStarter: boolean
 }
 
+type OverallShape = { position: Position; depthOrder: number; ratings: { overall: number } }
+
+/** Re-sorts each position group best-overall-first, mirroring "Best Roster"
+ * auto-optimize, so a post-trade depth chart (and thus starter/bench split)
+ * can be estimated for players who don't have a real depthOrder yet. */
+function reorderByOverall(players: OverallShape[]): OverallShape[] {
+  const byPos = new Map<Position, OverallShape[]>()
+  for (const p of players) {
+    const list = byPos.get(p.position) ?? []
+    list.push(p)
+    byPos.set(p.position, list)
+  }
+  const result: OverallShape[] = []
+  for (const list of byPos.values()) {
+    list.sort((a, b) => b.ratings.overall - a.ratings.overall)
+    list.forEach((p, i) => result.push({ ...p, depthOrder: i }))
+  }
+  return result
+}
+
+interface OverallChange {
+  teamBefore: number
+  teamAfter: number
+  posBefore: Record<string, number>
+  posAfter: Record<string, number>
+}
+
+/** Estimates team- and position-overall before/after a trade: players
+ * leaving are dropped, incoming players are slotted into their position
+ * group and everyone re-ranked by overall (see reorderByOverall). */
+function computeOverallChange(
+  roster: Player[],
+  removeIds: number[],
+  addPlayers: { position: Position; overall: number }[],
+): OverallChange {
+  const removeSet = new Set(removeIds)
+  const kept = roster.filter((p) => !removeSet.has(p.id))
+  const incoming: OverallShape[] = addPlayers.map((p) => ({ position: p.position, depthOrder: 0, ratings: { overall: p.overall } }))
+  const after = reorderByOverall([
+    ...kept.map((p) => ({ position: p.position, depthOrder: p.depthOrder, ratings: { overall: p.ratings.overall } })),
+    ...incoming,
+  ])
+  const positions = new Set<Position>([...roster.map((p) => p.position), ...addPlayers.map((p) => p.position)])
+  const posBefore: Record<string, number> = {}
+  const posAfter: Record<string, number> = {}
+  for (const pos of positions) {
+    const beforeGroup = roster.filter((p) => p.position === pos)
+    const afterGroup = after.filter((p) => p.position === pos)
+    posBefore[pos] = beforeGroup.length > 0 ? Math.round(computePositionOverall(beforeGroup)) : 0
+    posAfter[pos] = afterGroup.length > 0 ? Math.round(computePositionOverall(afterGroup)) : 0
+  }
+  return {
+    teamBefore: Math.round(computeTeamOverall(roster)),
+    teamAfter: Math.round(computeTeamOverall(after)),
+    posBefore,
+    posAfter,
+  }
+}
+
+function DeltaBadge({ before, after }: { before: number; after: number }) {
+  const delta = after - before
+  const color = delta > 0 ? 'text-emerald-400' : delta < 0 ? 'text-red-400' : 'text-gray-500'
+  return (
+    <span className={color}>
+      {before} → {after} ({delta > 0 ? '+' : ''}
+      {delta})
+    </span>
+  )
+}
+
+/** Team overall change plus any position(s) whose overall would shift,
+ * shown once per trade card so a user can judge impact beyond raw OVR. */
+function OverallChangeSummary({ change }: { change: OverallChange }) {
+  const posDeltas = Object.entries(change.posAfter).filter(([pos, after]) => after !== change.posBefore[pos])
+  return (
+    <p className="text-[10px] text-gray-500 mt-1">
+      Team overall: <DeltaBadge before={change.teamBefore} after={change.teamAfter} />
+      {posDeltas.length > 0 && (
+        <>
+          {' '}
+          &middot;{' '}
+          {posDeltas.map(([pos, after], i) => (
+            <span key={pos}>
+              {i > 0 && ', '}
+              {pos}: <DeltaBadge before={change.posBefore[pos]} after={after} />
+            </span>
+          ))}
+        </>
+      )}
+    </p>
+  )
+}
+
 /**
  * One player's block inside a trade breakdown card - stacked (not a wide
  * row) so it stays readable in a narrow, always-two-columns "your team vs.
@@ -1704,7 +1797,7 @@ function TradeView({
         <div className="mb-6 border border-emerald-800 rounded p-3 bg-emerald-950/30">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-semibold text-emerald-300">
-              Suggested Trades for You ({suggestedTrades.length})
+              Trade Offers ({suggestedTrades.length})
             </h3>
             <button
               onClick={() => {
@@ -1725,6 +1818,7 @@ function TradeView({
               const giveSalary = s.give.reduce((sum, p) => sum + p.salary, 0)
               const getSalary = s.get.reduce((sum, p) => sum + p.salary, 0)
               const netSalary = getSalary - giveSalary
+              const overallChange = computeOverallChange(myRoster, s.giveIds, s.get)
               return (
                 <div key={key} className="border-b border-emerald-900 pb-2 last:border-0 last:pb-0">
                   <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
@@ -1780,6 +1874,7 @@ function TradeView({
                       {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
                     </span>
                   </p>
+                  <OverallChangeSummary change={overallChange} />
                 </div>
               )
             })}
@@ -1950,6 +2045,11 @@ function TradeOfferRow({
   const requestSalary = requestPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
   // Positive = you'd be taking on more salary than you shed (cap space goes down).
   const netSalary = offerSalary - requestSalary
+  const overallChange = computeOverallChange(
+    userRoster,
+    requestPlayers.map((p) => p.id),
+    offerPlayers.map((p) => ({ position: p.position, overall: p.ratings.overall })),
+  )
 
   return (
     <div className="border border-blue-900 rounded p-2">
@@ -2006,6 +2106,7 @@ function TradeOfferRow({
           {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
         </span>
       </p>
+      <OverallChangeSummary change={overallChange} />
     </div>
   )
 }
