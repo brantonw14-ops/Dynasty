@@ -2789,7 +2789,34 @@ function DraftView({
       )}
 
       {subTab === 'mypicks' ? (
-        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <>
+          <div className="sm:hidden flex flex-col gap-2">
+            {myPicks.map((entry) => {
+              const prospect = board.prospects[entry.prospectIndex]
+              const round = Math.floor((entry.pickNumber - 1) / board.picksPerRound) + 1
+              return (
+                <div key={entry.pickNumber} className="border border-slate-800 rounded-md p-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">
+                      {prospect.firstName} {prospect.lastName} <span className="text-gray-500">({prospect.position})</span>
+                    </span>
+                    <span className="text-gray-500 whitespace-nowrap">
+                      Rd {round}, Pick {entry.pickNumber}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-gray-300">
+                    <span>Age {prospect.age}</span>
+                    <span className={overallColor(prospect.ratings.overall)}>{prospect.ratings.overall} OVR</span>
+                    <span className="text-yellow-400">{prospect.ratings.potential} POT</span>
+                  </div>
+                  <div className="text-gray-400 mt-0.5">{prospect.college}</div>
+                </div>
+              )
+            })}
+            {myPicks.length === 0 && <p className="text-sm text-gray-500 py-2">No picks made yet.</p>}
+          </div>
+
+          <div className="hidden sm:block overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
 <table className="w-full min-w-[560px] text-sm border-collapse data-table">
           <thead>
             <tr className="text-left text-gray-400 border-b">
@@ -2832,8 +2859,53 @@ function DraftView({
           </tbody>
         </table>
 </div>
+        </>
       ) : (
-        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <>
+          <div className="sm:hidden flex flex-col gap-2">
+            {sorted.map((p) => {
+              const needed = userNeeds.has(p.position)
+              return (
+                <div key={p.index} className="border border-slate-800 rounded-md p-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-medium">
+                        {p.firstName} {p.lastName}
+                      </span>{' '}
+                      <span className="text-gray-500">({p.position})</span>
+                      {needed && (
+                        <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-amber-900 text-amber-200">need</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handlePick(p.index)}
+                      disabled={!board.isUserTurn || pickingIndex === p.index}
+                      className="px-2 py-1 bg-blue-600 text-white rounded text-[11px] disabled:opacity-40 whitespace-nowrap shrink-0"
+                    >
+                      {pickingIndex === p.index ? '...' : 'Draft'}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-gray-300">
+                    <span>Age {p.age}</span>
+                    <span className={overallColor(p.ratings.overall)}>{p.ratings.overall} OVR</span>
+                    <span className="text-yellow-400">{p.ratings.potential} POT</span>
+                  </div>
+                  <div className="text-gray-400 mt-0.5">
+                    {p.college} <span className="text-gray-500">· {COLLEGE_TIER_LABELS[p.collegeTier]}</span>
+                  </div>
+                  <div className="text-gray-500 mt-0.5">{p.collegeStatLine}</div>
+                  <div className="text-gray-500 mt-0.5">{p.scoutingNote}</div>
+                </div>
+              )
+            })}
+            {sorted.length === 0 && (
+              <p className="text-sm text-gray-500 py-2">
+                {positionFilter ? `No ${positionFilter} prospects left on the board.` : 'No prospects left on the board.'}
+              </p>
+            )}
+          </div>
+
+          <div className="hidden sm:block overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
 <table className="w-full min-w-[560px] text-sm border-collapse data-table">
           <thead>
             <tr className="text-left text-gray-400 border-b">
@@ -2893,6 +2965,7 @@ function DraftView({
           </tbody>
         </table>
 </div>
+        </>
       )}
     </div>
   )

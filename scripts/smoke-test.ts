@@ -226,6 +226,33 @@ async function assertSeasonSane(leagueId: number, season: number) {
   )
   console.log('OK: defensive line, secondary, and special teams stats are internally consistent')
 
+  // Regression test: CB/S coverage stats (yards/rating allowed) used to be
+  // split identically across the whole secondary regardless of who was
+  // actually a good cover guy - confirm real per-player variance shows up
+  // instead of every corner/safety on a team posting the same number.
+  const secondaryByTeamGame = new Map<string, typeof dbStats>()
+  for (const s of dbStats) {
+    const key = `${s.gameId}-${s.teamId}`
+    const list = secondaryByTeamGame.get(key) ?? []
+    list.push(s)
+    secondaryByTeamGame.set(key, list)
+  }
+  let groupsWithMultiple = 0
+  let groupsWithVariance = 0
+  for (const group of secondaryByTeamGame.values()) {
+    if (group.length < 2) continue
+    groupsWithMultiple++
+    const ratings = group.map((g) => g.passerRatingAllowed)
+    if (new Set(ratings).size > 1) groupsWithVariance++
+  }
+  if (groupsWithMultiple === 0) throw new Error('Expected at least one team-game with 2+ active CB/S to compare')
+  if (groupsWithVariance / groupsWithMultiple < 0.5) {
+    throw new Error(
+      `Expected most multi-player secondary groups to show per-player variance in passerRatingAllowed, got ${groupsWithVariance}/${groupsWithMultiple}`,
+    )
+  }
+  console.log(`OK: CB/S coverage stats vary per player (${groupsWithVariance}/${groupsWithMultiple} team-games show variance)`)
+
   // Regression test: a team's standings record must count ALL its games, not
   // just games against opponents who are also in the subset passed in (this
   // broke the division standings table, which computes each division's

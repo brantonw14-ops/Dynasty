@@ -370,9 +370,13 @@ function generateDefenseBox(
   }
 
   // Yards allowed and passer rating allowed are team-wide efficiency
-  // numbers, credited to every active member of the secondary - a
-  // simplification (no per-target coverage tracking yet), but it reflects
-  // how well the pass defense as a whole is playing.
+  // numbers (no per-target coverage tracking - which receiver each guy
+  // covered on which play - modeled yet), but they shouldn't be handed out
+  // identically to the whole secondary either: a real box score has a
+  // shutdown corner posting a great number while the weak link across from
+  // him gets picked on. Weight each player's share by their own coverage
+  // skill (Man + Zone Coverage) relative to the group's average, so the
+  // better cover guys show better numbers and the worse ones show worse.
   const ratingAllowed = passerRating(
     opponent.passAttempts,
     opponent.passCompletions,
@@ -380,11 +384,20 @@ function generateDefenseBox(
     opponent.passTDs,
     opponent.interceptions,
   )
-  for (const { player } of activeSecondary) {
+  const coverageSkill = (p: Player) => (p.ratings.attr2 + p.ratings.attr3) / 2
+  const skills = activeSecondary.map(({ player }) => coverageSkill(player))
+  const avgSkill = skills.length > 0 ? skills.reduce((s, v) => s + v, 0) / skills.length : 60
+  // A weaker-than-average defender takes a bigger slice of the yardage and
+  // a worse (higher) rating allowed; a shutdown corner takes less of both.
+  const weights = skills.map((sk) => avgSkill / Math.max(30, sk))
+  const totalWeight = weights.reduce((s, v) => s + v, 0) || 1
+  activeSecondary.forEach(({ player }, i) => {
     const stats = statsFor(defenseBox, player)
-    stats.yardsAllowed += Math.round(opponent.passYards / activeSecondary.length)
-    stats.passerRatingAllowed = ratingAllowed
-  }
+    const share = weights[i] / totalWeight
+    stats.yardsAllowed += Math.round(opponent.passYards * share)
+    const relativeWeakness = avgSkill / Math.max(30, skills[i])
+    stats.passerRatingAllowed = Math.min(158.3, Math.max(0, ratingAllowed * relativeWeakness))
+  })
 
   // Tackles: most go to the front seven (run plays + short completions),
   // the rest to the secondary (plays that get to open space).
