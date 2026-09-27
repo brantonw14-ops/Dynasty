@@ -295,26 +295,36 @@ export function isStarterInRoster(player: { id: number; position: Position; dept
   return rank >= 0 && rank < starterCount
 }
 
-/**
- * A position group's overall isn't a flat average of the whole depth chart -
- * the starter and the next man up matter far more than the 3rd/4th string
- * guys who barely see the field. Weights each player's contribution by
- * depth-chart rank (starter counts full, each rank down counts less).
- */
-export function computePositionOverall(players: { depthOrder: number; ratings: { overall: number } }[]): number {
-  if (players.length === 0) return 0
-  const sorted = [...players].sort((a, b) => a.depthOrder - b.depthOrder)
-  let weightedSum = 0
-  let weightTotal = 0
-  sorted.forEach((p, i) => {
-    const weight = Math.pow(0.6, i)
-    weightedSum += p.ratings.overall * weight
-    weightTotal += weight
-  })
-  return weightTotal > 0 ? weightedSum / weightTotal : 0
+function avgOverall(players: { ratings: { overall: number } }[]): number {
+  return players.length > 0 ? players.reduce((sum, p) => sum + p.ratings.overall, 0) / players.length : 0
 }
 
-/** Team-wide overall: each position's (starter-weighted) overall, weighted again by how many of that position actually play. */
+/**
+ * A position group's overall isn't a flat average of the whole depth chart -
+ * the starters are who's actually on the field. 90% of a position's overall
+ * comes from the average of its starters (by depth-chart rank, using
+ * STARTER_COUNTS), the other 10% from the bench behind them - so a deep,
+ * talented bench still counts for a little, but doesn't drag down (or prop
+ * up) a rating that should mostly reflect who's starting.
+ */
+export function computePositionOverall(players: { position: Position; depthOrder: number; ratings: { overall: number } }[]): number {
+  if (players.length === 0) return 0
+  const position = players[0].position
+  const starterCount = Math.min(STARTER_COUNTS[position] ?? 1, players.length)
+  const sorted = [...players].sort((a, b) => a.depthOrder - b.depthOrder)
+  const starters = sorted.slice(0, starterCount)
+  const bench = sorted.slice(starterCount)
+  if (bench.length === 0) return avgOverall(starters)
+  if (starters.length === 0) return avgOverall(bench)
+  return avgOverall(starters) * 0.9 + avgOverall(bench) * 0.1
+}
+
+/**
+ * Team-wide overall: 95% from the average of every position's starters
+ * (each position's starter count from STARTER_COUNTS, so a position that
+ * starts more players - OL, DL - naturally counts for more), 5% from the
+ * bench across the whole roster.
+ */
 export function computeTeamOverall(
   roster: { position: Position; depthOrder: number; ratings: { overall: number } }[],
 ): number {
@@ -324,14 +334,17 @@ export function computeTeamOverall(
     list.push(p)
     byPosition.set(p.position, list)
   }
-  let sum = 0
-  let weightTotal = 0
+  const starters: typeof roster = []
+  const bench: typeof roster = []
   for (const [position, group] of byPosition) {
-    const weight = STARTER_COUNTS[position] ?? 1
-    sum += computePositionOverall(group) * weight
-    weightTotal += weight
+    const starterCount = Math.min(STARTER_COUNTS[position] ?? 1, group.length)
+    const sorted = [...group].sort((a, b) => a.depthOrder - b.depthOrder)
+    starters.push(...sorted.slice(0, starterCount))
+    bench.push(...sorted.slice(starterCount))
   }
-  return weightTotal > 0 ? sum / weightTotal : 0
+  if (bench.length === 0) return avgOverall(starters)
+  if (starters.length === 0) return avgOverall(bench)
+  return avgOverall(starters) * 0.95 + avgOverall(bench) * 0.05
 }
 
 export type TeamOutlook = 'rebuilding' | 'contender' | 'superbowl'

@@ -31,7 +31,7 @@ import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
 import { buildGameReasons, classifyGamePerformance } from '../src/engine/gameReport'
 import { passerRating } from '../src/engine/gameSim'
-import { computePositionOverall, computeTeamOverall, MIN_OVERALL, MIN_ROSTER_SIZE, rosterNeeds } from '../src/engine/players'
+import { computePositionOverall, computeTeamOverall, MIN_OVERALL, MIN_ROSTER_SIZE, rosterNeeds, STARTER_COUNTS } from '../src/engine/players'
 import { marketSalary } from '../src/engine/salary'
 import { gradeSeasonPerformance } from '../src/engine/seasonPerformance'
 import { computeStandings } from '../src/engine/standings'
@@ -774,22 +774,27 @@ async function main() {
   })()
 
   await (async () => {
-    // Position/team overall should be starter-weighted: swapping a strong
-    // starter to the bottom of the depth chart and a weak backup to the top
-    // should measurably drag the position (and team) overall down, even
-    // though the underlying set of players - and a flat average - is
-    // unchanged.
+    // Position/team overall should be starter-weighted (90% starters/10%
+    // bench for a position, 95%/5% for the team): pushing a strong starter
+    // out of the starting group (past the bench boundary, not just one
+    // adjacent swap within the starters) and a weak backup into it should
+    // measurably drag the position (and team) overall down, even though the
+    // underlying set of players - and a flat average - is unchanged.
     const leagueNow = (await db.leagues.get(leagueId))!
     if (leagueNow.userTeamId == null) throw new Error('League has no user team')
     const roster = await db.players.where('teamId').equals(leagueNow.userTeamId).toArray()
     const wrGroup = roster.filter((p) => p.position === 'WR').sort((a, b) => a.depthOrder - b.depthOrder)
-    if (wrGroup.length < 2) throw new Error('Expected at least 2 WRs to test starter-weighted overall')
+    if (wrGroup.length <= STARTER_COUNTS.WR) throw new Error('Expected at least one WR bench player to test starter-weighted overall')
 
     const before = computePositionOverall(wrGroup)
     const bestId = [...wrGroup].sort((a, b) => b.ratings.overall - a.ratings.overall)[0].id
     const worstId = [...wrGroup].sort((a, b) => a.ratings.overall - b.ratings.overall)[0].id
-    if (bestId !== worstId) {
-      if (wrGroup[0].id === bestId) await moveDepthChart(leagueNow.userTeamId, bestId, 'down')
+    if (bestId !== worstId && wrGroup[0].id === bestId) {
+      // Walk the best starter one adjacent swap at a time past the starter
+      // count, so it ends up on the bench and the next man up starts instead.
+      for (let i = 0; i < STARTER_COUNTS.WR; i++) {
+        await moveDepthChart(leagueNow.userTeamId, bestId, 'down')
+      }
     }
 
     const rosterAfter = await db.players.where('teamId').equals(leagueNow.userTeamId).toArray()
