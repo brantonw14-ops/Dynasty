@@ -292,6 +292,18 @@ function sumRushing(stats: PlayerGameStats[]) {
   )
 }
 
+/** Total offensive output/plays for a team's game - used to judge explosiveness (yards per play) without needing a real play-by-play log. */
+function sumOffense(stats: PlayerGameStats[]) {
+  return stats.reduce(
+    (acc, s) => {
+      acc.yards += s.passYards + s.rushYards
+      acc.plays += s.passAttempts + s.rushAttempts
+      return acc
+    },
+    { yards: 0, plays: 0 },
+  )
+}
+
 /**
  * The head coach's report to the GM: a handful of "keys to the game" - the
  * things that actually mattered against this specific opponent - each
@@ -309,6 +321,39 @@ export function buildCoachReport(myStats: PlayerGameStats[], oppStats: PlayerGam
   const myYpc = myRushing.yards / Math.max(1, myRushing.attempts)
 
   const keys: CoachReportKey[] = []
+
+  const qbLine = myStats.find((s) => s.position === 'QB' && s.passAttempts > 0)
+  if (qbLine) {
+    const rating = passerRating(qbLine.passAttempts, qbLine.passCompletions, qbLine.passYards, qbLine.passTDs, qbLine.interceptions)
+    keys.push({
+      label: 'Quarterback Play',
+      succeeded: rating >= 90,
+      detail: `${qbLine.passCompletions}/${qbLine.passAttempts}, ${qbLine.passYards} yds, ${qbLine.passTDs} TD, ${qbLine.interceptions} INT (${rating.toFixed(1)} rating)`,
+      improvementTip:
+        'The QB didn\'t play well enough to win - better decision-making/accuracy at the position, or an upgrade under center, would fix this.',
+    })
+  }
+
+  // Explosive-play battle - who created chunk yardage and who gave it up.
+  // No real play-by-play log exists yet to count actual 20+ yard gains, so
+  // this uses yards-per-play (offense created vs offense allowed) as the
+  // closest real signal the box score can speak to.
+  const myOffense = sumOffense(myStats)
+  const oppOffense = sumOffense(oppStats)
+  const myYardsPerPlay = myOffense.yards / Math.max(1, myOffense.plays)
+  const oppYardsPerPlay = oppOffense.yards / Math.max(1, oppOffense.plays)
+  keys.push({
+    label: 'Create Explosive Plays',
+    succeeded: myYardsPerPlay >= 5.5,
+    detail: `${myYardsPerPlay.toFixed(1)} yds/play on offense`,
+    improvementTip: 'The offense isn\'t creating chunk yardage - look for a burner at WR or a home-run threat at RB.',
+  })
+  keys.push({
+    label: 'Limit Explosive Plays',
+    succeeded: oppYardsPerPlay <= 5.5,
+    detail: `${oppYardsPerPlay.toFixed(1)} yds/play allowed on defense`,
+    improvementTip: 'The defense keeps giving up chunk yardage - look for more team speed at linebacker, safety, or corner.',
+  })
 
   keys.push({
     label: 'Establish the Run',

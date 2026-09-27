@@ -1,4 +1,5 @@
 import type { Player, Position } from '../types'
+import { STARTER_COUNTS } from './players'
 import { randInt, randNormal, type Rng } from './rng'
 
 /**
@@ -6,11 +7,46 @@ import { randInt, randNormal, type Rng } from './rng'
  * skill-position + OL ratings, defense from DL/LB/CB/S. No play-by-play yet —
  * this is the v1 placeholder to get a playable season loop; a drive-level
  * sim can replace this function without touching callers.
+ *
+ * Starter-weighted (90% starters / 10% bench per position, weighted again
+ * by each position's own starter count) - the same definition the
+ * Standings/Roster screens use for "team overall" (computeTeamOverall /
+ * computePositionOverall in players.ts). This used to be a flat average of
+ * every player at these positions including the whole bench, which meant a
+ * team that (correctly, for a GM) stacked elite starters behind a
+ * replacement-level bench looked far weaker to the actual game sim than
+ * the "82 overall, best in the league" the user saw on their own roster
+ * screen - the displayed number and the number the engine actually played
+ * off of were two different metrics.
  */
 function teamStrength(roster: Player[], positions: string[]) {
   const relevant = roster.filter((p) => positions.includes(p.position))
   if (relevant.length === 0) return 50
-  return relevant.reduce((sum, p) => sum + p.ratings.overall, 0) / relevant.length
+  const byPosition = new Map<string, Player[]>()
+  for (const p of relevant) {
+    const list = byPosition.get(p.position) ?? []
+    list.push(p)
+    byPosition.set(p.position, list)
+  }
+  const avgOverall = (list: Player[]) =>
+    list.length > 0 ? list.reduce((sum, p) => sum + p.ratings.overall, 0) / list.length : 0
+  let sum = 0
+  let weightTotal = 0
+  for (const [position, group] of byPosition) {
+    const starterCount = Math.min(STARTER_COUNTS[position as Position] ?? 1, group.length)
+    const sorted = [...group].sort((a, b) => a.depthOrder - b.depthOrder)
+    const starters = sorted.slice(0, starterCount)
+    const bench = sorted.slice(starterCount)
+    const positionValue =
+      bench.length === 0
+        ? avgOverall(starters)
+        : starters.length === 0
+          ? avgOverall(bench)
+          : avgOverall(starters) * 0.9 + avgOverall(bench) * 0.1
+    sum += positionValue * starterCount
+    weightTotal += starterCount
+  }
+  return weightTotal > 0 ? sum / weightTotal : 50
 }
 
 export interface PlayerBoxScore {
