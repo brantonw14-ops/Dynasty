@@ -174,17 +174,101 @@ interface OffenseOutput {
   totalTDs: number
 }
 
+const OFFENSE_POSITIONS = ['QB', 'RB', 'WR', 'TE', 'OL']
+const DEFENSE_POSITIONS = ['DL', 'LB', 'CB', 'S']
+
 /**
- * Turns a team's final score into a plausible individual box score: total
- * yardage estimated from the score, split between passing/rushing, then
- * distributed among the roster's skill players weighted by overall (so a
- * team's best RB/WR sees more volume than the backups, without ever being
- * literally the whole offense).
+ * The final score for a team, decided *before* any yardage/box stats are
+ * generated: how many touchdowns and field goals actually happened, and
+ * whether the kicker made each PAT/FG. Everything else (yardage, who got
+ * the ball) is flavor built around these already-decided scoring plays, so
+ * the final score is always exactly tds*6 + patMade + fgMade*3 - it can
+ * never drift from what the box score itself shows, the way an
+ * independently-rolled team score used to (a QB's 2 TDs + a "perfect"
+ * kicker not necessarily summing to the displayed score).
+ */
+interface ScoringPlan {
+  tds: number
+  passTDs: number
+  rushTDs: number
+  passShare: number
+  fgAttempted: number
+  fgMade: number
+  longestFieldGoal: number
+  patAttempted: number
+  patMade: number
+  score: number
+}
+
+function decideScoringPlan(rng: Rng, offRoster: Player[], defRoster: Player[], homeFieldEdge: number): ScoringPlan {
+  const offRating = teamStrength(offRoster, OFFENSE_POSITIONS)
+  const defRating = teamStrength(defRoster, DEFENSE_POSITIONS)
+  const diff = offRating - defRating + homeFieldEdge
+
+  // Real NFL teams combine for roughly 2.5 TDs and 1.7 FGs a game - a real
+  // talent gap shifts both how many scoring chances a team gets and how
+  // many of those chances turn into a TD instead of a field goal.
+  const expectedTds = Math.max(0.2, 2.35 + diff * 0.045)
+  const tds = Math.max(0, Math.round(randNormal(rng, expectedTds, Math.sqrt(expectedTds))))
+  const expectedFgTries = Math.max(0.1, 1.7 - diff * 0.015)
+  const fgAttempted = Math.max(0, Math.round(randNormal(rng, expectedFgTries, Math.sqrt(expectedFgTries))))
+
+  const passShare = Math.min(0.85, Math.max(0.45, 0.665 + randNormal(rng, 0, 0.07)))
+  let passTDs = 0
+  let rushTDs = 0
+  for (let i = 0; i < tds; i++) {
+    if (rng() < passShare * 0.85) passTDs++
+    else rushTDs++
+  }
+
+  // K attributes: attr1=Kick Accuracy, attr2=Kick Power, attr3=Clutch Gene.
+  const kicker = offRoster.filter((p) => p.position === 'K').sort((a, b) => a.depthOrder - b.depthOrder)[0]
+  const clutchDiscount = kicker ? (kicker.ratings.attr3 - 60) * 0.003 : 0
+  const fgMissChance = kicker ? clamp01((80 - kicker.ratings.attr1) * 0.01 - clutchDiscount) : 0.15
+  const patMissChance = kicker ? clamp01((85 - kicker.ratings.attr1) * 0.006 - clutchDiscount) : 0.05
+  const legStrength = kicker ? clamp01((kicker.ratings.attr2 - 50) / 50) : 0.5
+
+  let fgMade = 0
+  let longestFieldGoal = 0
+  for (let i = 0; i < fgAttempted; i++) {
+    if (rng() >= fgMissChance) {
+      fgMade++
+      longestFieldGoal = Math.max(longestFieldGoal, Math.round(32 + legStrength * 20 + rng() * 15))
+    }
+  }
+
+  let patMade = 0
+  for (let i = 0; i < tds; i++) {
+    if (rng() >= patMissChance) patMade++
+  }
+
+  return {
+    tds,
+    passTDs,
+    rushTDs,
+    passShare,
+    fgAttempted,
+    fgMade,
+    longestFieldGoal,
+    patAttempted: tds,
+    patMade,
+    score: tds * 6 + patMade + fgMade * 3,
+  }
+}
+
+/**
+ * Turns an already-decided scoring plan into a plausible individual box
+ * score: total yardage estimated from the resulting score, split between
+ * passing/rushing, then distributed among the roster's skill players
+ * weighted by overall (so a team's best RB/WR sees more volume than the
+ * backups, without ever being literally the whole offense). The TD count
+ * itself (and its pass/rush split) comes straight from the plan, not a
+ * second independent estimate, so it can never disagree with the score.
  */
 function generateOffenseBox(
   rng: Rng,
   roster: Player[],
-  teamScore: number,
+  plan: ScoringPlan,
   box: Map<number, PlayerBoxScore>,
 ): OffenseOutput {
   const statsFor = (p: Player) => {
@@ -204,20 +288,16 @@ function generateOffenseBox(
 
   // Calibrated against real 2024 NFL per-team-per-game averages: ~337 total
   // yards, ~224 passing / ~113 rushing, ~21.8 points - so totalYards tracks
-  // team quality (via score) but keeps a real floor even on a bad day,
-  // instead of collapsing toward zero the way a pure score-multiple did.
-  const totalYards = Math.max(180, Math.round(206 + teamScore * 6 + randNormal(rng, 0, 45)))
-  const passShare = Math.min(0.85, Math.max(0.45, 0.665 + randNormal(rng, 0, 0.07)))
+  // team quality (via the already-decided score) but keeps a real floor
+  // even on a bad day, instead of collapsing toward zero.
+  const totalYards = Math.max(180, Math.round(206 + plan.score * 6 + randNormal(rng, 0, 45)))
+  const passShare = plan.passShare
   const passYards = Math.round(totalYards * passShare)
   let rushYards = totalYards - passYards
 
-  const totalTDs = Math.max(0, Math.round(teamScore / 7 + randNormal(rng, 0, 0.4)))
-  let passTDs = 0
-  let rushTDs = 0
-  for (let i = 0; i < totalTDs; i++) {
-    if (rng() < passShare * 0.85) passTDs++
-    else rushTDs++
-  }
+  const totalTDs = plan.tds
+  const passTDs = plan.passTDs
+  const rushTDs = plan.rushTDs
 
   let attempts = 0
   let completions = 0
@@ -448,48 +528,27 @@ function generateDefenseBox(
   }
 }
 
-/** Kicking and punting box: field goals/PATs off the team's scoring, punts off how far short of a TD drive the rest of the game was. */
-function generateSpecialTeamsBox(
-  rng: Rng,
-  roster: Player[],
-  teamScore: number,
-  offense: OffenseOutput,
-  box: Map<number, PlayerBoxScore>,
-) {
+/**
+ * Kicking and punting box: field goals/PATs are just recorded straight off
+ * the already-decided scoring plan (no second dice roll here - that used
+ * to be where the score/box-stat mismatch crept in), punts off how far
+ * short of a TD drive the rest of the game was.
+ */
+function generateSpecialTeamsBox(rng: Rng, roster: Player[], plan: ScoringPlan, box: Map<number, PlayerBoxScore>) {
   const statsFor = (p: Player) => {
     if (!box.has(p.id)) box.set(p.id, emptyBox(p.id, p.position))
     return box.get(p.id)!
   }
   const byDepth = (a: Player, b: Player) => a.depthOrder - b.depthOrder
 
-  // K/P attributes: attr1=Kick Accuracy, attr2=Kick Power, attr3=Clutch Gene.
   const kicker = roster.filter((p) => p.position === 'K').sort(byDepth)[0]
   if (kicker) {
     const stats = statsFor(kicker)
-    const tdPoints = offense.totalTDs * 7
-    const remainingPoints = Math.max(0, teamScore - tdPoints)
-    const fgMade = Math.round(remainingPoints / 3)
-    const clutchDiscount = (kicker.ratings.attr3 - 60) * 0.003
-    const missChance = clamp01((80 - kicker.ratings.attr1) * 0.01 - clutchDiscount)
-    const fgAttempted = fgMade + (rng() < missChance ? 1 : 0)
-    stats.fieldGoalsMade += fgMade
-    stats.fieldGoalsAttempted += fgAttempted
-    if (fgMade > 0) {
-      const legStrength = clamp01((kicker.ratings.attr2 - 50) / 50)
-      stats.longestFieldGoal = Math.max(
-        stats.longestFieldGoal,
-        Math.round(32 + legStrength * 20 + rng() * 15),
-      )
-    }
-    if (offense.totalTDs > 0) {
-      const xpMissChance = clamp01((85 - kicker.ratings.attr1) * 0.006 - clutchDiscount)
-      let xpMade = 0
-      for (let i = 0; i < offense.totalTDs; i++) {
-        if (rng() >= xpMissChance) xpMade++
-      }
-      stats.extraPointsAttempted += offense.totalTDs
-      stats.extraPointsMade += xpMade
-    }
+    stats.fieldGoalsMade += plan.fgMade
+    stats.fieldGoalsAttempted += plan.fgAttempted
+    stats.longestFieldGoal = Math.max(stats.longestFieldGoal, plan.longestFieldGoal)
+    stats.extraPointsAttempted += plan.patAttempted
+    stats.extraPointsMade += plan.patMade
   }
 
   const punter = roster.filter((p) => p.position === 'P').sort(byDepth)[0]
@@ -497,7 +556,7 @@ function generateSpecialTeamsBox(
     const stats = statsFor(punter)
     // A stronger offense that scores more and picks up more total yardage
     // needs its punter less often.
-    const offenseQuality = clamp01((teamScore - 10) / 30)
+    const offenseQuality = clamp01((plan.score - 10) / 30)
     const puntCount = Math.max(1, randInt(rng, 3, 6) - Math.round(offenseQuality * 2))
     const legStrength = clamp01((punter.ratings.attr2 - 50) / 50)
     let totalPuntYards = 0
@@ -509,38 +568,61 @@ function generateSpecialTeamsBox(
   }
 }
 
+/** Adds one more authoritative scoring play (a made FG, or a TD+PAT try) onto a plan - used to break a regulation tie in a short OT. */
+function addOvertimeScore(rng: Rng, roster: Player[], plan: ScoringPlan) {
+  const kicker = roster.filter((p) => p.position === 'K').sort((a, b) => a.depthOrder - b.depthOrder)[0]
+  const clutchDiscount = kicker ? (kicker.ratings.attr3 - 60) * 0.003 : 0
+  if (rng() < 0.55) {
+    plan.fgAttempted += 1
+    plan.fgMade += 1
+    plan.score += 3
+    if (kicker) {
+      const legStrength = clamp01((kicker.ratings.attr2 - 50) / 50)
+      plan.longestFieldGoal = Math.max(plan.longestFieldGoal, Math.round(32 + legStrength * 20 + rng() * 15))
+    }
+    return
+  }
+  plan.tds += 1
+  if (rng() < plan.passShare * 0.85) plan.passTDs += 1
+  else plan.rushTDs += 1
+  plan.patAttempted += 1
+  const patMissChance = kicker ? clamp01((85 - kicker.ratings.attr1) * 0.006 - clutchDiscount) : 0.05
+  if (rng() >= patMissChance) {
+    plan.patMade += 1
+    plan.score += 7
+  } else {
+    plan.score += 6
+  }
+}
+
 export function simGame(rng: Rng, homeRoster: Player[], awayRoster: Player[]): SimResult {
-  const offense = ['QB', 'RB', 'WR', 'TE', 'OL']
-  const defense = ['DL', 'LB', 'CB', 'S']
-
-  const homeOff = teamStrength(homeRoster, offense)
-  const homeDef = teamStrength(homeRoster, defense)
-  const awayOff = teamStrength(awayRoster, offense)
-  const awayDef = teamStrength(awayRoster, defense)
-
-  const homeExpected = 20 + (homeOff - awayDef) * 0.35 + 2 // home-field edge
-  const awayExpected = 20 + (awayOff - homeDef) * 0.35
-
-  let homeScore = Math.max(0, Math.round(randNormal(rng, homeExpected, 8)))
-  let awayScore = Math.max(0, Math.round(randNormal(rng, awayExpected, 8)))
+  const homePlan = decideScoringPlan(rng, homeRoster, awayRoster, 2) // home-field edge
+  const awayPlan = decideScoringPlan(rng, awayRoster, homeRoster, 0)
 
   // Real NFL ties are rare (~0.1-0.2% of games); ours were landing far more
-  // often since two independent normal draws collide more than that. Send
-  // any regulation tie to a short overtime and force a winner, same as the
-  // real league effectively does outside the handful of true double-OT ties.
-  if (homeScore === awayScore) {
+  // often since two independently-decided scores collide more than that.
+  // Send any regulation tie to a short overtime and force a winner, same
+  // as the real league effectively does outside a handful of true double-OT
+  // ties - the extra score is added onto the winner's plan (not bolted on
+  // separately) so the final score always still matches that team's box.
+  if (homePlan.score === awayPlan.score) {
+    const homeOff = teamStrength(homeRoster, OFFENSE_POSITIONS)
+    const homeDef = teamStrength(homeRoster, DEFENSE_POSITIONS)
+    const awayOff = teamStrength(awayRoster, OFFENSE_POSITIONS)
+    const awayDef = teamStrength(awayRoster, DEFENSE_POSITIONS)
     const otEdge = (homeOff - awayDef - (awayOff - homeDef)) * 0.01
     const homeWinsOT = rng() < 0.5 + otEdge
-    const otPoints = rng() < 0.15 ? 3 : rng() < 0.5 ? 6 : 7 // FG, or a TD (2pt fails sometimes)
-    if (homeWinsOT) homeScore += otPoints
-    else awayScore += otPoints
+    addOvertimeScore(rng, homeWinsOT ? homeRoster : awayRoster, homeWinsOT ? homePlan : awayPlan)
   }
+
+  const homeScore = homePlan.score
+  const awayScore = awayPlan.score
 
   const homeBox = new Map<number, PlayerBoxScore>()
   const awayBox = new Map<number, PlayerBoxScore>()
 
-  const homeOffense = generateOffenseBox(rng, homeRoster, homeScore, homeBox)
-  const awayOffense = generateOffenseBox(rng, awayRoster, awayScore, awayBox)
+  const homeOffense = generateOffenseBox(rng, homeRoster, homePlan, homeBox)
+  const awayOffense = generateOffenseBox(rng, awayRoster, awayPlan, awayBox)
 
   const homeOl = homeRoster.filter((p) => p.position === 'OL')
   const awayOl = awayRoster.filter((p) => p.position === 'OL')
@@ -549,8 +631,8 @@ export function simGame(rng: Rng, homeRoster: Player[], awayRoster: Player[]): S
   generateDefenseBox(rng, awayRoster, homeOl, homeOffense, awayBox, homeBox)
   generateDefenseBox(rng, homeRoster, awayOl, awayOffense, homeBox, awayBox)
 
-  generateSpecialTeamsBox(rng, homeRoster, homeScore, homeOffense, homeBox)
-  generateSpecialTeamsBox(rng, awayRoster, awayScore, awayOffense, awayBox)
+  generateSpecialTeamsBox(rng, homeRoster, homePlan, homeBox)
+  generateSpecialTeamsBox(rng, awayRoster, awayPlan, awayBox)
 
   return { homeScore, awayScore, homeBox, awayBox }
 }

@@ -1102,12 +1102,28 @@ function GameReportView({
   )
 
   if (selectedEntry.kind === 'bye') {
+    const byeRecord = sortedGames
+      .filter((g) => g.round === undefined && g.week <= selectedEntry.week)
+      .reduce(
+        (rec, g) => {
+          const home = g.homeTeamId === userTeamId
+          const my = home ? g.homeScore : g.awayScore
+          const opp = home ? g.awayScore : g.homeScore
+          if (my > opp) rec.wins++
+          else if (my < opp) rec.losses++
+          else rec.ties++
+          return rec
+        },
+        { wins: 0, losses: 0, ties: 0 },
+      )
+    const byeRecordLabel = `${byeRecord.wins}-${byeRecord.losses}${byeRecord.ties > 0 ? `-${byeRecord.ties}` : ''}`
     return (
       <div>
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           {entrySelector}
           <p className="text-sm text-gray-500">
-            Week {selectedEntry.week} &middot; <span className="text-gray-300 font-semibold">BYE</span>
+            Week {selectedEntry.week} &middot; <span className="text-gray-300 font-semibold">BYE</span> &middot;{' '}
+            <span className="text-gray-300 font-semibold">{byeRecordLabel}</span>
           </p>
         </div>
         <p className="text-sm text-gray-400 border rounded p-3">
@@ -1193,6 +1209,27 @@ function GameReportView({
     ? selectedGame.round[0].toUpperCase() + selectedGame.round.slice(1)
     : `Week ${selectedGame.week}`
 
+  // Regular-season record through the currently-viewed game (not necessarily
+  // every game simmed so far, if the user is looking back at an earlier
+  // week's report) - playoff games don't count toward it.
+  const recordThroughSelected = sortedGames
+    .filter((g) => g.round === undefined && g.week <= (selectedGame.round ? Infinity : selectedGame.week))
+    .reduce(
+      (rec, g) => {
+        const home = g.homeTeamId === userTeamId
+        const my = home ? g.homeScore : g.awayScore
+        const opp = home ? g.awayScore : g.homeScore
+        if (my > opp) rec.wins++
+        else if (my < opp) rec.losses++
+        else rec.ties++
+        return rec
+      },
+      { wins: 0, losses: 0, ties: 0 },
+    )
+  const recordLabel = `${recordThroughSelected.wins}-${recordThroughSelected.losses}${
+    recordThroughSelected.ties > 0 ? `-${recordThroughSelected.ties}` : ''
+  }`
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -1202,7 +1239,8 @@ function GameReportView({
           <span className={won ? 'text-green-400 font-semibold' : tied ? 'text-gray-300' : 'text-red-400 font-semibold'}>
             {won ? 'WIN' : tied ? 'TIE' : 'LOSS'} {myScore}-{oppScore}
           </span>{' '}
-          vs {teamName(oppTeamId)}
+          vs {teamName(oppTeamId)} &middot;{' '}
+          <span className="text-gray-300 font-semibold">{recordLabel}</span>
         </p>
       </div>
 
@@ -2286,7 +2324,7 @@ function StatsLeadersView({
           {cat.rows.length === 0 ? (
             <p className="text-xs text-gray-500">No data yet.</p>
           ) : (
-            <table className="w-full text-sm border-collapse data-table">
+            <table className="w-full table-fixed text-sm border-collapse data-table">
               <tbody>
                 {cat.rows.map((r, i) => (
                   <tr
@@ -2294,8 +2332,8 @@ function StatsLeadersView({
                     className={`border-b ${isUserPlayer(r.playerId) ? 'bg-blue-900/50 border-l-2 border-l-blue-400 text-blue-100 font-medium' : ''}`}
                   >
                     <td className="py-1 text-gray-400 w-5 pl-1">{i + 1}</td>
-                    <td className="py-1 truncate max-w-0">{nameFor(r.playerId)}</td>
-                    <td className="py-1 text-right whitespace-nowrap">
+                    <td className="py-1 truncate">{nameFor(r.playerId)}</td>
+                    <td className="py-1 text-right whitespace-nowrap w-24">
                       {r.value.toLocaleString()} {cat.unit}
                       {r.extra != null && r.extra > 0 ? ` · ${r.extra} TD` : ''}
                     </td>
