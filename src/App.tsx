@@ -3085,6 +3085,60 @@ function userRowClass(teamId: number, userTeamId: number | null) {
     : ''
 }
 
+function DivisionStandingsTable({
+  conf,
+  div,
+  teams,
+  regularGames,
+  teamName,
+  userTeamId,
+  teamOverallFor,
+}: {
+  conf: Conference
+  div: Division
+  teams: Team[]
+  regularGames: GameResult[]
+  teamName: (id: number) => string
+  userTeamId: number | null
+  teamOverallFor: (id: number) => number | null
+}) {
+  const divTeams = teams.filter((t) => t.conference === conf && t.division === div)
+  const standings = computeStandings(divTeams, regularGames)
+  return (
+    <div>
+      <h3 className="text-xs font-semibold text-blue-400 mb-1">
+        {conf} {div}
+      </h3>
+      <table className="w-full text-sm border-collapse data-table">
+        <thead>
+          <tr className="text-gray-500 text-[10px]">
+            <th className="py-1 pl-1 text-left font-normal"></th>
+            <th className="py-1 text-right w-8 font-normal">W</th>
+            <th className="py-1 text-right w-8 font-normal">L</th>
+            <th className="py-1 text-right w-8 font-normal">T</th>
+          </tr>
+        </thead>
+        <tbody>
+          {standings.map((row) => {
+            const ovr = teamOverallFor(row.teamId)
+            return (
+              <tr key={row.teamId} className={`border-b ${userRowClass(row.teamId, userTeamId)}`}>
+                <td className="py-1 pl-1">
+                  {teamName(row.teamId)}
+                  {ovr != null && <span className={`ml-1.5 text-[10px] ${overallColor(ovr)}`}>{ovr} OVR</span>}
+                </td>
+                <td className="py-1 text-right w-8 text-emerald-400 font-semibold">{row.wins}</td>
+                <td className="py-1 text-right w-8 text-red-400 font-semibold">{row.losses}</td>
+                <td className="py-1 text-right w-8 text-gray-400">{row.ties}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function StandingsTable({
   teams,
   regularGames,
@@ -3098,51 +3152,25 @@ function StandingsTable({
   userTeamId: number | null
   teamOverallFor: (id: number) => number | null
 }) {
+  const userTeam = teams.find((t) => t.id === userTeamId)
+  const tableProps = { teams, regularGames, teamName, userTeamId, teamOverallFor }
   return (
     <>
+      {userTeam && (
+        <div className="mb-8">
+          <h2 className="text-lg font-medium mb-2 text-amber-400">Your Division</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 max-w-md">
+            <DivisionStandingsTable conf={userTeam.conference} div={userTeam.division} {...tableProps} />
+          </div>
+        </div>
+      )}
       {CONFERENCES.map((conf) => (
         <div key={conf} className="mb-8">
           <h2 className="text-lg font-medium mb-2">{conf}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
             {DIVISIONS.map((div) => {
-              const divTeams = teams.filter((t) => t.conference === conf && t.division === div)
-              const standings = computeStandings(divTeams, regularGames)
-              return (
-                <div key={div}>
-                  <h3 className="text-xs font-semibold text-blue-400 mb-1">
-                    {conf} {div}
-                  </h3>
-                  <table className="w-full text-sm border-collapse data-table">
-                    <thead>
-                      <tr className="text-gray-500 text-[10px]">
-                        <th className="py-1 pl-1 text-left font-normal"></th>
-                        <th className="py-1 text-right w-8 font-normal">W</th>
-                        <th className="py-1 text-right w-8 font-normal">L</th>
-                        <th className="py-1 text-right w-8 font-normal">T</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {standings.map((row) => {
-                        const ovr = teamOverallFor(row.teamId)
-                        return (
-                        <tr
-                          key={row.teamId}
-                          className={`border-b ${userRowClass(row.teamId, userTeamId)}`}
-                        >
-                          <td className="py-1 pl-1">
-                            {teamName(row.teamId)}
-                            {ovr != null && <span className={`ml-1.5 text-[10px] ${overallColor(ovr)}`}>{ovr} OVR</span>}
-                          </td>
-                          <td className="py-1 text-right w-8 text-emerald-400 font-semibold">{row.wins}</td>
-                          <td className="py-1 text-right w-8 text-red-400 font-semibold">{row.losses}</td>
-                          <td className="py-1 text-right w-8 text-gray-400">{row.ties}</td>
-                        </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )
+              if (userTeam && userTeam.conference === conf && userTeam.division === div) return null
+              return <DivisionStandingsTable key={div} conf={conf} div={div} {...tableProps} />
             })}
           </div>
         </div>
