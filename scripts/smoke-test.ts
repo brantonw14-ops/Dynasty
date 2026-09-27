@@ -30,8 +30,9 @@ import {
 import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
 import { buildGameReasons, classifyGamePerformance } from '../src/engine/gameReport'
-import { passerRating } from '../src/engine/gameSim'
+import { passerRating, simGame } from '../src/engine/gameSim'
 import { computePositionOverall, computeTeamOverall, MIN_OVERALL, MIN_ROSTER_SIZE, rosterNeeds, STARTER_COUNTS } from '../src/engine/players'
+import { createRng } from '../src/engine/rng'
 import { marketSalary } from '../src/engine/salary'
 import { gradeSeasonPerformance } from '../src/engine/seasonPerformance'
 import { computeStandings } from '../src/engine/standings'
@@ -253,6 +254,42 @@ async function assertSeasonSane(leagueId: number, season: number) {
     )
   }
   console.log(`OK: CB/S coverage stats vary per player (${groupsWithVariance}/${groupsWithMultiple} team-games show variance)`)
+
+  // Regression test: exactly the top-5-by-depth-chart OL should ever record
+  // a stat (pancakes, sacks/TFLs allowed) - a real offensive line doesn't
+  // rotate, unless a starter is hurt (simWeek already strips injured
+  // players before handing a roster to simGame, which legitimately
+  // promotes the next man up - that's why this calls simGame directly on a
+  // known-healthy snapshot instead of scanning the season's real games,
+  // where an in-season injury would make a "bench" player's stat a false
+  // positive). This caught a real bug: the OL list passed into the
+  // *defense* side (crediting sacks/TFLs allowed) wasn't sorted by depth
+  // chart before activeWithShares picked "the first 5", so bench linemen
+  // (in whatever order .filter() happened to return them) got credited.
+  {
+    const allPlayers = await db.players.toArray()
+    let benchOlWithStats = 0
+    for (const t of teams) {
+      const roster = allPlayers.filter((p) => p.teamId === t.id && !p.injury)
+      const ol = roster.filter((p) => p.position === 'OL').sort((a, b) => a.depthOrder - b.depthOrder)
+      if (ol.length <= 5) continue
+      const otherTeamId = teams.find((o) => o.id !== t.id)!.id
+      const opponent = allPlayers.filter((p) => p.teamId === otherTeamId && !p.injury)
+      const benchIds = new Set(ol.slice(5).map((p) => p.id))
+      for (let g = 0; g < 10; g++) {
+        const result = simGame(createRng(t.id * 100 + g), roster, opponent)
+        for (const box of result.homeBox.values()) {
+          if (box.position === 'OL' && benchIds.has(box.playerId) && (box.pancakes > 0 || box.sacksAllowed > 0 || box.tflsAllowed > 0)) {
+            benchOlWithStats++
+          }
+        }
+      }
+    }
+    if (benchOlWithStats > 0) {
+      throw new Error(`${benchOlWithStats} bench OL (depth chart rank 6+) recorded a stat across a healthy-roster simGame check - OL should never rotate`)
+    }
+    console.log('OK: only the top-5 OL by depth chart ever record a stat on a healthy roster (no bench OL rotation)')
+  }
 
   // Regression test: a team's standings record must count ALL its games, not
   // just games against opponents who are also in the subset passed in (this

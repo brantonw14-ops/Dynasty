@@ -624,8 +624,14 @@ export function simGame(rng: Rng, homeRoster: Player[], awayRoster: Player[]): S
   const homeOffense = generateOffenseBox(rng, homeRoster, homePlan, homeBox)
   const awayOffense = generateOffenseBox(rng, awayRoster, awayPlan, awayBox)
 
-  const homeOl = homeRoster.filter((p) => p.position === 'OL')
-  const awayOl = awayRoster.filter((p) => p.position === 'OL')
+  // Sorted by depth chart order - generateDefenseBox/activeWithShares picks
+  // "the top 5" by array index, so an unsorted list here let bench linemen
+  // (whatever order .filter() happened to return) get credited with sacks
+  // /TFLs allowed even though the offense side correctly only used the real
+  // top 5.
+  const byDepthOrder = (a: Player, b: Player) => a.depthOrder - b.depthOrder
+  const homeOl = homeRoster.filter((p) => p.position === 'OL').sort(byDepthOrder)
+  const awayOl = awayRoster.filter((p) => p.position === 'OL').sort(byDepthOrder)
 
   // Away's defense faced home's offense, and vice versa.
   generateDefenseBox(rng, awayRoster, homeOl, homeOffense, awayBox, homeBox)
