@@ -31,7 +31,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
-import { buildGameReasons, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
+import { buildGameHeadlines, buildGameReasons, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
 import {
   computePositionOverall,
   computeTeamOverall,
@@ -1168,6 +1168,21 @@ function GameReportView({
   const badPerformers = graded.filter((g) => g.tag === 'bad')
   const reasons = won || tied ? [] : buildGameReasons(myStatLines, won, myScore, oppScore)
   const winReasons = won ? buildGameReasons(myStatLines, won, myScore, oppScore) : []
+  const headlinePlayers = myStatLines
+    .map((s) => {
+      const player = boxScorePlayerById.get(s.playerId)
+      if (!player) return null
+      return {
+        playerId: s.playerId,
+        firstName: player.firstName,
+        lastName: player.lastName,
+        position: s.position,
+        overall: player.ratings.overall,
+        stat: s,
+      }
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null)
+  const headlines = tied ? [] : buildGameHeadlines(headlinePlayers, won, myScore, oppScore)
 
   // Season-wide trend, not just this one game - a single bad game is noise,
   // but a position that keeps grading out poorly across multiple games is
@@ -1243,6 +1258,17 @@ function GameReportView({
           <span className="text-gray-300 font-semibold">{recordLabel}</span>
         </p>
       </div>
+
+      {headlines.length > 0 && (
+        <div className="mb-6 border border-amber-800 rounded p-3 bg-amber-950/20">
+          <h3 className="text-sm font-semibold text-amber-300 mb-2">Storylines</h3>
+          <ul className="text-sm space-y-1.5 text-amber-100">
+            {headlines.map((h, i) => (
+              <li key={i}>{h}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mb-6 border rounded p-3">
         <h3 className="text-sm font-semibold text-gray-500 mb-2">
