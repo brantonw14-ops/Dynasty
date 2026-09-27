@@ -270,6 +270,7 @@ function generateOffenseBox(
   roster: Player[],
   plan: ScoringPlan,
   box: Map<number, PlayerBoxScore>,
+  opponentSecondary: Player[],
 ): OffenseOutput {
   const statsFor = (p: Player) => {
     if (!box.has(p.id)) box.set(p.id, emptyBox(p.id, p.position))
@@ -317,8 +318,12 @@ function generateOffenseBox(
     // great arm still needs someone to catch the ball.
     attempts = Math.max(18, Math.round(passYards / 6.8 + randNormal(rng, 0, 3)))
     const receiverStrength = teamStrength(roster, ['WR', 'TE'])
+    // Completion rate reflects this week's actual matchup - a good receiving
+    // corps against a weak secondary completes more than the same corps
+    // would against a shutdown unit, not just a flat league-average baseline.
+    const oppCoverageStrength = teamStrength(opponentSecondary, ['CB', 'S'])
     const completionRate = clamp01(
-      0.63 + (qb.ratings.attr1 - 68) * 0.005 + (receiverStrength - 68) * 0.003,
+      0.63 + (qb.ratings.attr1 - 68) * 0.005 + (receiverStrength - oppCoverageStrength) * 0.003,
     )
     completions = Math.min(attempts, Math.max(0, Math.round(attempts * completionRate)))
     stats.passAttempts += attempts
@@ -364,10 +369,44 @@ function generateOffenseBox(
     ...activeWrPlayers.slice(3),
     ...activeTePlayers.slice(1),
   ]
+  // A receiver's actual matchup this week matters, not just their raw
+  // overall: catching + route running is what wins a contested target, and
+  // speed only matters relative to THIS week's opposing coverage - a burner
+  // against a slow secondary gets a real boost the same speed rating
+  // wouldn't get against a track team of corners.
+  //
+  // This has to be built from each receiver's speed *relative to his own
+  // receiving corps*, not an absolute edge vs the opposing secondary's
+  // speed - applying the same absolute (own speed - opponent speed) shift
+  // to every receiver on the team and then renormalizing their shares
+  // actually inverts the intended effect: a fixed absolute penalty is a
+  // smaller relative hit to a high-rated WR1's multiplier than to a
+  // low-rated bench guy's, so tougher (faster) coverage perversely
+  // increased the star's *share* of an already-shrunken pie. Scaling by
+  // how much faster this player is than his own teammates - not by his
+  // raw speed against a shared baseline - means a burner is specifically
+  // exposed (or helped) by the matchup while an average-speed possession
+  // receiver barely moves either way.
+  const oppSecondarySpeed =
+    opponentSecondary.length > 0
+      ? opponentSecondary.reduce((sum, p) => sum + p.ratings.attr1, 0) / opponentSecondary.length
+      : 68
+  const teamReceiverSpeed =
+    receiverOrder.length > 0 ? receiverOrder.reduce((sum, p) => sum + p.ratings.attr1, 0) / receiverOrder.length : 68
+  // Positive when this week's coverage is slower than a league-average
+  // secondary (a break for burners), negative when it's faster (a burner
+  // gets neutralized, a possession receiver is barely affected).
+  const defenseSlowness = Math.max(-1.5, Math.min(1.5, (68 - oppSecondarySpeed) / 20))
+  const matchupMultiplier = (p: Player) => {
+    const catchingAndRoutes = (p.ratings.attr2 + p.ratings.attr3) / 2
+    const speedEdgeVsTeammates = p.ratings.attr1 - teamReceiverSpeed
+    const skillEdge = catchingAndRoutes - 68
+    return Math.max(0.6, Math.min(1.5, 1 + speedEdgeVsTeammates * defenseSlowness * 0.006 + skillEdge * 0.002))
+  }
   const receiverShares = [0.3, 0.22, 0.16, 0.12, 0.1, 0.06, 0.04]
   const receiverRawShares = receiverOrder.map((p, i) => {
     const base = receiverShares[i] ?? receiverShares[receiverShares.length - 1] * 0.5
-    return base * Math.pow(Math.max(30, p.ratings.overall), 1.6)
+    return base * Math.pow(Math.max(30, p.ratings.overall), 1.6) * matchupMultiplier(p)
   })
   const receiverShareTotal = receiverRawShares.reduce((a, b) => a + b, 0) || 1
   const activeReceivers = receiverOrder.map((player, i) => ({ player, share: receiverRawShares[i] / receiverShareTotal }))
@@ -644,8 +683,10 @@ export function simGame(rng: Rng, homeRoster: Player[], awayRoster: Player[]): S
   const homeBox = new Map<number, PlayerBoxScore>()
   const awayBox = new Map<number, PlayerBoxScore>()
 
-  const homeOffense = generateOffenseBox(rng, homeRoster, homePlan, homeBox)
-  const awayOffense = generateOffenseBox(rng, awayRoster, awayPlan, awayBox)
+  const homeSecondary = homeRoster.filter((p) => p.position === 'CB' || p.position === 'S')
+  const awaySecondary = awayRoster.filter((p) => p.position === 'CB' || p.position === 'S')
+  const homeOffense = generateOffenseBox(rng, homeRoster, homePlan, homeBox, awaySecondary)
+  const awayOffense = generateOffenseBox(rng, awayRoster, awayPlan, awayBox, homeSecondary)
 
   // Sorted by depth chart order - generateDefenseBox/activeWithShares picks
   // "the top 5" by array index, so an unsorted list here let bench linemen
