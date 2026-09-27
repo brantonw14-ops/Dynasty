@@ -283,7 +283,8 @@ function generateOffenseBox(
 
   const qb = roster.filter((p) => p.position === 'QB').sort(byDepth)[0]
   const rbs = roster.filter((p) => p.position === 'RB').sort(byDepth)
-  const receivers = roster.filter((p) => p.position === 'WR' || p.position === 'TE').sort(byDepth)
+  const wrs = roster.filter((p) => p.position === 'WR').sort(byDepth)
+  const tes = roster.filter((p) => p.position === 'TE').sort(byDepth)
   const ol = roster.filter((p) => p.position === 'OL').sort(byDepth)
 
   // Calibrated against real 2024 NFL per-team-per-game averages: ~337 total
@@ -348,16 +349,28 @@ function generateOffenseBox(
   // a near-zero deepChance approximates (some noise for legitimate blowout
   // garbage-time snaps, not a real rotation).
   const activeRbs = activeWithShares(rng, rbs, 1, 1, 0.6, 0.03, [0.68, 0.22, 0.08, 0.02], 1.6)
-  const activeReceivers = activeWithShares(
-    rng,
-    receivers,
-    3,
-    2,
-    0.55,
-    0.2,
-    [0.3, 0.22, 0.16, 0.12, 0.1, 0.06, 0.04],
-    1.6,
-  )
+
+  // WR and TE used to be merged into one depthOrder-sorted list before
+  // picking who plays - since depthOrder resets independently per position,
+  // that could produce something like 2 WR + 3 TE active instead of a
+  // realistic 3-4 WR + 1-2 TE. Pick participants per position, then merge
+  // in real target-priority order (WR1-3 first, then TE1, then the rest)
+  // before applying the target-share curve below.
+  const activeWrPlayers = activeWithShares(rng, wrs, 3, 1, 0.6, 0.15, [1]).map((a) => a.player)
+  const activeTePlayers = activeWithShares(rng, tes, 1, 1, 0.5, 0.1, [1]).map((a) => a.player)
+  const receiverOrder: Player[] = [
+    ...activeWrPlayers.slice(0, 3),
+    ...activeTePlayers.slice(0, 1),
+    ...activeWrPlayers.slice(3),
+    ...activeTePlayers.slice(1),
+  ]
+  const receiverShares = [0.3, 0.22, 0.16, 0.12, 0.1, 0.06, 0.04]
+  const receiverRawShares = receiverOrder.map((p, i) => {
+    const base = receiverShares[i] ?? receiverShares[receiverShares.length - 1] * 0.5
+    return base * Math.pow(Math.max(30, p.ratings.overall), 1.6)
+  })
+  const receiverShareTotal = receiverRawShares.reduce((a, b) => a + b, 0) || 1
+  const activeReceivers = receiverOrder.map((player, i) => ({ player, share: receiverRawShares[i] / receiverShareTotal }))
 
   if (activeRbs.length > 0) {
     // Yards per carry averages a bit below 4.3 in the real NFL, but a run
@@ -434,8 +447,10 @@ function generateDefenseBox(
   }
 
   const byDepth = (a: Player, b: Player) => a.depthOrder - b.depthOrder
-  const front = defenseRoster.filter((p) => p.position === 'DL' || p.position === 'LB').sort(byDepth)
-  const secondary = defenseRoster.filter((p) => p.position === 'CB' || p.position === 'S').sort(byDepth)
+  const dl = defenseRoster.filter((p) => p.position === 'DL').sort(byDepth)
+  const lb = defenseRoster.filter((p) => p.position === 'LB').sort(byDepth)
+  const cb = defenseRoster.filter((p) => p.position === 'CB').sort(byDepth)
+  const s = defenseRoster.filter((p) => p.position === 'S').sort(byDepth)
 
   const rushAttempts = Math.max(15, Math.round(opponent.rushYards / 4.3))
   const totalPlays = opponent.passAttempts + rushAttempts
@@ -446,10 +461,16 @@ function generateDefenseBox(
   const sacks = Math.min(opponent.passAttempts, Math.round(opponent.passAttempts * sackRate))
   const tfls = Math.max(0, Math.round(rushAttempts * 0.06 + randNormal(rng, 0, 1)))
 
-  // Front-7 starters (top 7 by depth chart) are on the field for the bulk of
-  // defensive snaps in a real game; rotational depth sees the field less
-  // often, and the deepest bodies on the roster barely at all.
-  const activeFront = activeWithShares(rng, front, 7, 2, 0.4, 0.1, [1, 1, 1, 1, 1, 1, 1, 0.5, 0.5])
+  // DL and LB used to be merged into one "front seven" list and cut at a
+  // single top-7 by depthOrder - but depthOrder resets independently per
+  // position, so interleaving two positions that way produced unrealistic
+  // splits (e.g. 6 LBs and only 4 DL suiting up in the same game, instead
+  // of a real front's ~4-6 DL + ~3-4 LB). Pick participants separately per
+  // position, each with its own realistic cap, then pool them for weighted
+  // sack/TFL/tackle assignment below.
+  const activeDl = activeWithShares(rng, dl, 4, 2, 0.5, 0.15, [1, 1, 1, 1, 0.6, 0.6])
+  const activeLb = activeWithShares(rng, lb, 3, 1, 0.5, 0.1, [1, 1, 1, 0.6])
+  const activeFront = [...activeDl, ...activeLb]
   const frontWeight = (p: Player) => Math.pow(p.ratings.overall, 1.8)
   for (let i = 0; i < sacks; i++) {
     statsFor(defenseBox, pickWeighted(rng, activeFront.map((a) => a.player), frontWeight)).sacks += 1
@@ -459,9 +480,11 @@ function generateDefenseBox(
   }
 
   const incompletions = Math.max(0, opponent.passAttempts - opponent.passCompletions - opponent.interceptions)
-  // Same idea in the secondary - the starting 4 (2 CB, 2 S) are out there
-  // for most snaps, with a nickel/dime piece rotating in less often.
-  const activeSecondary = activeWithShares(rng, secondary, 4, 1, 0.45, 0.1, [1, 1, 1, 1, 0.5, 0.5])
+  // Same fix in the secondary - CB and S each get their own realistic cap
+  // (3 CB, 2-3 S) instead of being merged into one depthOrder-sorted list.
+  const activeCb = activeWithShares(rng, cb, 3, 1, 0.5, 0.1, [1, 1, 1, 0.6])
+  const activeS = activeWithShares(rng, s, 2, 1, 0.45, 0.1, [1, 1, 0.6])
+  const activeSecondary = [...activeCb, ...activeS]
   const secondaryWeight = (p: Player) => Math.pow(p.ratings.overall, 1.8)
 
   // The offense's own thrown interceptions are the defense's takeaways.
