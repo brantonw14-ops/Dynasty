@@ -29,7 +29,7 @@ import {
 } from '../src/engine/league'
 import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
-import { buildGameReasons, classifyGamePerformance } from '../src/engine/gameReport'
+import { buildCoachReport, buildGameReasons, classifyGamePerformance } from '../src/engine/gameReport'
 import { passerRating, simGame } from '../src/engine/gameSim'
 import { computePositionOverall, computeTeamOverall, MIN_OVERALL, MIN_ROSTER_SIZE, rosterNeeds, STARTER_COUNTS } from '../src/engine/players'
 import { createRng } from '../src/engine/rng'
@@ -135,6 +135,31 @@ async function assertSeasonSane(leagueId: number, season: number) {
     // week (not just the standouts classifyGamePerformance tags).
     const oppTeamId = isHome ? reportGame.awayTeamId : reportGame.homeTeamId
     const oppStats = stats.filter((s) => s.gameId === reportGame.id && s.teamId === oppTeamId)
+
+    // Coach's Report: a handful of pass/fail "keys to the game" plus an
+    // overall 1-10 grade - should always produce at least one key and a
+    // grade in range, and the grade should actually track how many keys
+    // were won (not some unrelated number).
+    const coachReport = buildCoachReport(reportStats, oppStats)
+    if (coachReport.keys.length === 0) throw new Error('Coach report produced no keys to the game')
+    if (coachReport.grade < 1 || coachReport.grade > 10) {
+      throw new Error(`Coach report grade ${coachReport.grade} is out of the expected 1-10 range`)
+    }
+    const expectedGrade = Math.max(
+      1,
+      Math.min(10, Math.round((coachReport.keys.filter((k) => k.succeeded).length / coachReport.keys.length) * 10)),
+    )
+    if (coachReport.grade !== expectedGrade) {
+      throw new Error(`Coach report grade ${coachReport.grade} doesn't match the fraction of keys won (expected ${expectedGrade})`)
+    }
+    for (const k of coachReport.keys) {
+      if (!k.succeeded && !k.improvementTip) throw new Error(`Failed key "${k.label}" has no improvement tip`)
+    }
+    console.log(
+      `coach report: ${coachReport.grade}/10, ${coachReport.keys.filter((k) => k.succeeded).length}/${coachReport.keys.length} keys won`,
+    )
+    console.log('OK: coach report grades keys to the game and always explains a failed one')
+
     const weekStats = stats.filter((s) => s.week === reportGame.week)
     const weekGrades = gradeSeasonPerformance(weekStats)
     const bothSidesStats = [...reportStats, ...oppStats]

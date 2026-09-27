@@ -266,3 +266,108 @@ export function buildGameReasons(myStats: PlayerGameStats[], won: boolean, mySco
 
   return reasons
 }
+
+export interface CoachReportKey {
+  label: string
+  succeeded: boolean
+  detail: string
+  /** A concrete roster move to consider - only set when the key failed. */
+  improvementTip?: string
+}
+
+export interface CoachReport {
+  /** 1-10, like a coach grading his own team's performance against a specific opponent. */
+  grade: number
+  keys: CoachReportKey[]
+}
+
+function sumRushing(stats: PlayerGameStats[]) {
+  return stats.reduce(
+    (acc, s) => {
+      acc.yards += s.rushYards
+      acc.attempts += s.rushAttempts
+      return acc
+    },
+    { yards: 0, attempts: 0 },
+  )
+}
+
+/**
+ * The head coach's report to the GM: a handful of "keys to the game" - the
+ * things that actually mattered against this specific opponent - each
+ * graded pass/fail with a concrete reason and, when it failed, a roster
+ * move worth considering. This is the same shape a real coordinator's
+ * post-game self-scout uses (establish the run, protect the QB, win
+ * the turnover battle, generate pressure, defend the run and pass,
+ * finish in the kicking game) rather than a prose recap - a GM should be
+ * able to scan it and know exactly what to go fix.
+ */
+export function buildCoachReport(myStats: PlayerGameStats[], oppStats: PlayerGameStats[]): CoachReport {
+  const mine = aggregateTeamTotals(myStats)
+  const myRushing = sumRushing(myStats)
+  const oppRushing = sumRushing(oppStats)
+  const myYpc = myRushing.yards / Math.max(1, myRushing.attempts)
+
+  const keys: CoachReportKey[] = []
+
+  keys.push({
+    label: 'Establish the Run',
+    succeeded: myRushing.yards >= 90 && myYpc >= 4.0,
+    detail: `${myRushing.yards} yds on ${myRushing.attempts} carries (${myYpc.toFixed(1)} ypc)`,
+    improvementTip: 'The ground game didn\'t move the needle - look for offensive line help or a more explosive back.',
+  })
+
+  keys.push({
+    label: 'Protect the Quarterback',
+    succeeded: mine.sacksAllowed <= 2,
+    detail: `${mine.sacksAllowed} sack(s) allowed`,
+    improvementTip: 'Pass protection is a real weakness - target an upgrade on the offensive line.',
+  })
+
+  const turnoverMargin = mine.turnoversForced - mine.turnoversCommitted
+  keys.push({
+    label: 'Win the Turnover Battle',
+    succeeded: turnoverMargin >= 0,
+    detail:
+      turnoverMargin >= 0
+        ? `+${turnoverMargin} margin (${mine.turnoversForced} forced, ${mine.turnoversCommitted} given up)`
+        : `${turnoverMargin} margin (${mine.turnoversForced} forced, ${mine.turnoversCommitted} given up)`,
+    improvementTip: 'Ball security and takeaways swung this one - a more careful QB or a playmaking secondary would help.',
+  })
+
+  keys.push({
+    label: 'Pressure Their Quarterback',
+    succeeded: mine.sacksMade >= 2,
+    detail: `${mine.sacksMade} sack(s) made`,
+    improvementTip: 'The pass rush didn\'t get home enough - look for an edge rusher or a blitzing linebacker.',
+  })
+
+  keys.push({
+    label: 'Defend the Pass',
+    succeeded: mine.passYardsAllowed <= 225,
+    detail: `${mine.passYardsAllowed} yds allowed through the air`,
+    improvementTip: 'The secondary got exposed - upgrade at cornerback or safety.',
+  })
+
+  keys.push({
+    label: 'Defend the Run',
+    succeeded: oppRushing.yards <= 100,
+    detail: `${oppRushing.yards} yds allowed on the ground`,
+    improvementTip: 'Too easy to run on - look for a stouter defensive line or a run-stopping linebacker.',
+  })
+
+  const kickAttempts = myStats.reduce((s, r) => s + r.fieldGoalsAttempted + r.extraPointsAttempted, 0)
+  if (kickAttempts > 0) {
+    keys.push({
+      label: 'Win the Kicking Game',
+      succeeded: mine.fieldGoalsMissed === 0,
+      detail: mine.fieldGoalsMissed === 0 ? 'Perfect on kicks' : `${mine.fieldGoalsMissed} missed kick(s)`,
+      improvementTip: 'Missed kicks left points on the field - a more accurate kicker would help close out games like this.',
+    })
+  }
+
+  const succeededCount = keys.filter((k) => k.succeeded).length
+  const grade = Math.max(1, Math.min(10, Math.round((succeededCount / keys.length) * 10)))
+
+  return { grade, keys }
+}

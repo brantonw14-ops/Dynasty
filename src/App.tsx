@@ -31,7 +31,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
-import { buildGameHeadlines, buildGameReasons, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
+import { buildCoachReport, buildGameHeadlines, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
 import {
   computePositionOverall,
   computeTeamOverall,
@@ -1166,8 +1166,6 @@ function GameReportView({
 
   const goodPerformers = graded.filter((g) => g.tag === 'good')
   const badPerformers = graded.filter((g) => g.tag === 'bad')
-  const reasons = won || tied ? [] : buildGameReasons(myStatLines, won, myScore, oppScore)
-  const winReasons = won ? buildGameReasons(myStatLines, won, myScore, oppScore) : []
   const headlinePlayers = myStatLines
     .map((s) => {
       const player = boxScorePlayerById.get(s.playerId)
@@ -1183,6 +1181,8 @@ function GameReportView({
     })
     .filter((x): x is NonNullable<typeof x> => x !== null)
   const headlines = tied ? [] : buildGameHeadlines(headlinePlayers, won, myScore, oppScore)
+  const oppStatLines = statsForGame.filter((s) => s.teamId === oppTeamId)
+  const coachReport = buildCoachReport(myStatLines, oppStatLines)
 
   // Season-wide trend, not just this one game - a single bad game is noise,
   // but a position that keeps grading out poorly across multiple games is
@@ -1271,14 +1271,39 @@ function GameReportView({
       )}
 
       <div className="mb-6 border rounded p-3">
-        <h3 className="text-sm font-semibold text-gray-500 mb-2">
-          {won ? 'What went right' : tied ? 'How it played out' : 'Why we lost'}
-        </h3>
-        <ul className="text-sm space-y-1 list-disc list-inside text-gray-300">
-          {(won ? winReasons : reasons).map((r, i) => (
-            <li key={i}>{r}</li>
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <h3 className="text-sm font-semibold text-gray-300">Coach's Report</h3>
+          <span
+            className={`text-sm font-bold px-2 py-0.5 rounded ${
+              coachReport.grade >= 8
+                ? 'bg-emerald-900 text-emerald-300'
+                : coachReport.grade >= 5
+                  ? 'bg-amber-900 text-amber-300'
+                  : 'bg-red-900 text-red-300'
+            }`}
+          >
+            {coachReport.grade}/10
+          </span>
+        </div>
+        <p className="text-xs text-gray-500 mb-3">
+          How the game plan actually held up against {teamName(oppTeamId)} - what we executed, what we didn't, and what
+          it'll take to fix.
+        </p>
+        <ul className="text-sm space-y-2">
+          {coachReport.keys.map((k) => (
+            <li key={k.label} className="border-b border-gray-800 pb-2 last:border-0 last:pb-0">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5">
+                  <span className={k.succeeded ? 'text-emerald-400' : 'text-red-400'}>{k.succeeded ? '✓' : '✗'}</span>
+                  <span className="font-medium">{k.label}</span>
+                </span>
+                <span className="text-xs text-gray-400 whitespace-nowrap">{k.detail}</span>
+              </div>
+              {!k.succeeded && k.improvementTip && (
+                <p className="text-xs text-gray-500 mt-0.5 pl-5">{k.improvementTip}</p>
+              )}
+            </li>
           ))}
-          {tied && <li>Game ended tied - review the individual performances below for what to fix.</li>}
         </ul>
       </div>
 
