@@ -29,7 +29,7 @@ import {
 } from '../src/engine/league'
 import { POSITION_AGE_PROFILE } from '../src/engine/ages'
 import { computeCapSpace } from '../src/engine/freeAgency'
-import { buildCoachReport, buildGameReasons, classifyGamePerformance } from '../src/engine/gameReport'
+import { buildCoachReport, buildGameReasons, buildGameRecap, classifyGamePerformance } from '../src/engine/gameReport'
 import { passerRating, simGame } from '../src/engine/gameSim'
 import { computePositionOverall, computeTeamOverall, MIN_OVERALL, MIN_ROSTER_SIZE, rosterNeeds, STARTER_COUNTS } from '../src/engine/players'
 import { createRng } from '../src/engine/rng'
@@ -159,6 +159,60 @@ async function assertSeasonSane(leagueId: number, season: number) {
       `coach report: ${coachReport.grade}/10, ${coachReport.keys.filter((k) => k.succeeded).length}/${coachReport.keys.length} keys won`,
     )
     console.log('OK: coach report grades keys to the game and always explains a failed one')
+
+    // Beat-report recap: should always produce at least one paragraph
+    // (unlike the headline-only version, this runs every game) and should
+    // never crash building the "entering this game" records it needs.
+    const reportWeekGradesForRecap = gradeSeasonPerformance(stats.filter((s) => s.week === reportGame.week))
+    const allPlayersForRecap = await db.players.toArray()
+    const recapPlayers = reportStats
+      .map((s) => {
+        const p = allPlayersForRecap.find((pl) => pl.id === s.playerId)
+        if (!p) return null
+        return {
+          playerId: s.playerId,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          position: s.position,
+          overall: p.ratings.overall,
+          stat: s,
+          grade: reportWeekGradesForRecap.get(s.playerId),
+        }
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+    const entryRank = reportGame.round ? Infinity : reportGame.week
+    const recordEntering = (teamId: number) =>
+      games
+        .filter((g) => g.round === undefined && g.week < entryRank && (g.homeTeamId === teamId || g.awayTeamId === teamId))
+        .reduce(
+          (rec, g) => {
+            const home = g.homeTeamId === teamId
+            const my = home ? g.homeScore : g.awayScore
+            const opp = home ? g.awayScore : g.homeScore
+            if (my > opp) rec.wins++
+            else if (my < opp) rec.losses++
+            else rec.ties++
+            return rec
+          },
+          { wins: 0, losses: 0, ties: 0 },
+        )
+    const teamNameFor = (id: number) => teams.find((t) => t.id === id)?.abbrev ?? `#${id}`
+    const recap = buildGameRecap(
+      recapPlayers,
+      reportStats,
+      oppStats,
+      myScore > oppScore,
+      myScore === oppScore,
+      myScore,
+      oppScore,
+      teamNameFor(userTeamId),
+      teamNameFor(oppTeamId),
+      recordEntering(userTeamId),
+      recordEntering(oppTeamId),
+    )
+    if (recap.length === 0) throw new Error('Game recap produced no paragraphs')
+    console.log(`beat report: ${recap.length} paragraph(s)`)
+    console.log('OK: game recap always produces at least one paragraph')
 
     const weekStats = stats.filter((s) => s.week === reportGame.week)
     const weekGrades = gradeSeasonPerformance(weekStats)

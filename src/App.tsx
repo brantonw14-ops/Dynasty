@@ -31,7 +31,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
-import { buildCoachReport, buildGameHeadlines, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
+import { buildCoachReport, buildGameHeadlines, buildGameRecap, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
 import {
   computePositionOverall,
   computeTeamOverall,
@@ -1006,6 +1006,13 @@ function GameReportView({
         .toArray(),
     [leagueId, season, userTeamId],
   )
+  // Every team's games this season (not just the user's) - needed to know
+  // the opponent's own record entering this matchup, for the "this team
+  // really underperformed against a bad team" framing in the game recap.
+  const allSeasonGames = useLiveQuery(
+    () => db.games.where('leagueId').equals(leagueId).and((g) => g.season === season).toArray(),
+    [leagueId, season],
+  )
   const roster = useLiveQuery(() => db.players.where('teamId').equals(userTeamId).toArray(), [userTeamId])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
 
@@ -1064,7 +1071,7 @@ function GameReportView({
     [selectedGame?.id, seasonStats],
   )
 
-  if (!games || !roster || !seasonStats || !boxScorePlayers || !league) {
+  if (!games || !allSeasonGames || !roster || !seasonStats || !boxScorePlayers || !league) {
     return <p className="text-sm text-gray-500">Loading game report...</p>
   }
   if (entries.length === 0 || !selectedEntry) {
@@ -1177,12 +1184,48 @@ function GameReportView({
         position: s.position,
         overall: player.ratings.overall,
         stat: s,
+        grade: weekGrades.get(s.playerId),
       }
     })
     .filter((x): x is NonNullable<typeof x> => x !== null)
   const headlines = tied ? [] : buildGameHeadlines(headlinePlayers, won, myScore, oppScore)
   const oppStatLines = statsForGame.filter((s) => s.teamId === oppTeamId)
   const coachReport = buildCoachReport(myStatLines, oppStatLines)
+
+  // Both teams' records *entering* this matchup (not including it) - the
+  // game recap below uses this to tell whether a result was actually a
+  // letdown or a genuine upset, not just a plain win/loss.
+  const entryRank = selectedGame.round ? Infinity : selectedGame.week
+  const recordEntering = (teamId: number, gamesList: GameResult[]) =>
+    gamesList
+      .filter((g) => g.round === undefined && g.week < entryRank && (g.homeTeamId === teamId || g.awayTeamId === teamId))
+      .reduce(
+        (rec, g) => {
+          const home = g.homeTeamId === teamId
+          const my = home ? g.homeScore : g.awayScore
+          const opp = home ? g.awayScore : g.homeScore
+          if (my > opp) rec.wins++
+          else if (my < opp) rec.losses++
+          else rec.ties++
+          return rec
+        },
+        { wins: 0, losses: 0, ties: 0 },
+      )
+  const myRecordEntering = recordEntering(userTeamId, sortedGames)
+  const oppRecordEntering = recordEntering(oppTeamId, allSeasonGames)
+  const gameRecap = buildGameRecap(
+    headlinePlayers,
+    myStatLines,
+    oppStatLines,
+    won,
+    tied,
+    myScore,
+    oppScore,
+    teamName(userTeamId),
+    teamName(oppTeamId),
+    myRecordEntering,
+    oppRecordEntering,
+  )
 
   // Season-wide trend, not just this one game - a single bad game is noise,
   // but a position that keeps grading out poorly across multiple games is
@@ -1259,16 +1302,21 @@ function GameReportView({
         </p>
       </div>
 
-      {headlines.length > 0 && (
-        <div className="mb-6 border border-amber-800 rounded p-3 bg-amber-950/20">
-          <h3 className="text-sm font-semibold text-amber-300 mb-2">Storylines</h3>
-          <ul className="text-sm space-y-1.5 text-amber-100">
+      <div className="mb-6 border border-amber-800 rounded p-3 bg-amber-950/20">
+        <h3 className="text-sm font-semibold text-amber-300 mb-2">Beat Report</h3>
+        <div className="text-sm space-y-2 text-amber-100">
+          {gameRecap.map((p, i) => (
+            <p key={i}>{p}</p>
+          ))}
+        </div>
+        {headlines.length > 0 && (
+          <ul className="text-xs space-y-1 text-amber-200/80 mt-2 pt-2 border-t border-amber-900 list-disc list-inside">
             {headlines.map((h, i) => (
               <li key={i}>{h}</li>
             ))}
           </ul>
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="mb-6 border rounded p-3">
         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">

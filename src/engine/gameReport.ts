@@ -416,3 +416,136 @@ export function buildCoachReport(myStats: PlayerGameStats[], oppStats: PlayerGam
 
   return { grade, keys }
 }
+
+export interface TeamRecord {
+  wins: number
+  losses: number
+  ties: number
+}
+
+function winPct(r: TeamRecord): number {
+  const games = r.wins + r.losses + r.ties
+  return games > 0 ? (r.wins + r.ties * 0.5) / games : 0.5
+}
+
+function recordLabel(r: TeamRecord): string {
+  return `${r.wins}-${r.losses}${r.ties > 0 ? `-${r.ties}` : ''}`
+}
+
+export interface RecapPlayer extends HeadlinePlayer {
+  /** This game's league-wide letter grade, if there were enough position peers that week to grade it. */
+  grade?: SeasonGrade
+}
+
+/**
+ * A local-beat-reporter recap of this exact game, not just a stat line -
+ * how the result reads against expectations. A heavy favorite losing to a
+ * bottom-feeder gets called a letdown by name, a huge underdog winning gets
+ * treated as a real story, and an ordinary result still gets real
+ * paragraphs on the quarterback, the defense, and whichever starter had a
+ * game to forget. Unlike buildGameHeadlines (which only fires on standout
+ * games), this always returns at least one paragraph - it runs every week.
+ */
+export function buildGameRecap(
+  players: RecapPlayer[],
+  myStats: PlayerGameStats[],
+  oppStats: PlayerGameStats[],
+  won: boolean,
+  tied: boolean,
+  myScore: number,
+  oppScore: number,
+  teamName: string,
+  oppTeamName: string,
+  myRecordEntering: TeamRecord,
+  oppRecordEntering: TeamRecord,
+): string[] {
+  const margin = Math.abs(myScore - oppScore)
+  const myPct = winPct(myRecordEntering)
+  const oppPct = winPct(oppRecordEntering)
+  const gap = myPct - oppPct
+  const myGamesEntering = myRecordEntering.wins + myRecordEntering.losses + myRecordEntering.ties
+  const oppGamesEntering = oppRecordEntering.wins + oppRecordEntering.losses + oppRecordEntering.ties
+  // Don't read anything into a "gap" from a handful of early-season games -
+  // a 2-1 team beating a 0-3 team isn't a real upset storyline yet.
+  const enoughSample = myGamesEntering >= 4 && oppGamesEntering >= 4
+
+  const paragraphs: string[] = []
+
+  if (tied) {
+    paragraphs.push(
+      `${teamName} and ${oppTeamName} played to a ${myScore}-${oppScore} stalemate - not the decisive answer either sideline wanted heading into next week.`,
+    )
+  } else if (!won && enoughSample && gap >= 0.35) {
+    paragraphs.push(
+      `Wow. This team really went under expectations against ${oppTeamName} - ${teamName} came in ${recordLabel(myRecordEntering)} against a ${recordLabel(oppRecordEntering)} outfit and still walked away with a ${myScore}-${oppScore} loss. That is exactly the kind of game a team with real ambitions cannot drop.`,
+    )
+  } else if (won && enoughSample && gap <= -0.35) {
+    paragraphs.push(
+      `Somebody didn't get the memo. A ${recordLabel(myRecordEntering)} ${teamName} team went out and knocked off a ${recordLabel(oppRecordEntering)} ${oppTeamName} squad, ${myScore}-${oppScore} - the kind of result that should turn heads around the league.`,
+    )
+  } else if (won && margin >= 21) {
+    paragraphs.push(`${teamName} left no doubt, handling ${oppTeamName} ${myScore}-${oppScore} from start to finish.`)
+  } else if (won && margin <= 6 && enoughSample && gap >= 0.35) {
+    paragraphs.push(
+      `${teamName} survived ${oppTeamName} ${myScore}-${oppScore} - a win is a win, but it was closer than it had any business being. This team should never want a game that close against a ${recordLabel(oppRecordEntering)} opponent.`,
+    )
+  } else if (won && margin <= 6) {
+    paragraphs.push(`${teamName} needed every bit of it, escaping ${oppTeamName} ${myScore}-${oppScore}.`)
+  } else if (won) {
+    paragraphs.push(`${teamName} got the job done against ${oppTeamName}, ${myScore}-${oppScore}.`)
+  } else if (margin >= 21) {
+    paragraphs.push(`A rough one all around - ${teamName} never found an answer in a ${myScore}-${oppScore} loss to ${oppTeamName}.`)
+  } else {
+    paragraphs.push(`${teamName} came up just short against ${oppTeamName}, ${myScore}-${oppScore}.`)
+  }
+
+  const qb = players.find((p) => p.position === 'QB' && p.stat.passAttempts >= 5)
+  if (qb) {
+    const rating = passerRating(
+      qb.stat.passAttempts,
+      qb.stat.passCompletions,
+      qb.stat.passYards,
+      qb.stat.passTDs,
+      qb.stat.interceptions,
+    )
+    const qbName = `${qb.firstName} ${qb.lastName}`
+    const line = `${qb.stat.passCompletions}/${qb.stat.passAttempts}, ${qb.stat.passYards} yds, ${qb.stat.passTDs} TD, ${qb.stat.interceptions} INT`
+    if (rating >= 110) {
+      paragraphs.push(`${qbName} was outstanding under center - ${line} (${rating.toFixed(1)} rating).`)
+    } else if (rating >= 90) {
+      paragraphs.push(`${qbName} did his job at quarterback - ${line}.`)
+    } else if (rating >= 70) {
+      paragraphs.push(
+        `${qbName} was up and down - ${line} (${rating.toFixed(1)} rating) - nothing that beat the offense on its own, but nothing to build a game plan around either.`,
+      )
+    } else {
+      paragraphs.push(`${qbName} played well below standard - ${line} (${rating.toFixed(1)} rating). That's not winning football at the position.`)
+    }
+  }
+
+  const passYardsAllowed = myStats.reduce((sum, s) => sum + s.yardsAllowed, 0)
+  const oppRush = sumRushing(oppStats)
+  if (passYardsAllowed >= 280 || oppRush.yards >= 150) {
+    paragraphs.push(
+      `The defense allowed anything and everything to get by - ${passYardsAllowed} yds through the air and ${oppRush.yards} on the ground for ${oppTeamName}. That has to get cleaned up.`,
+    )
+  } else if (passYardsAllowed <= 175 && oppRush.yards <= 80) {
+    paragraphs.push(`The defense held up its end - ${oppTeamName} managed just ${passYardsAllowed} passing and ${oppRush.yards} rushing yards.`)
+  }
+
+  // A specific starter having an off night, called out by name - checked in
+  // rough order of how visible the position is to a GM deciding who to fix.
+  const offNightPriority: Position[] = ['QB', 'RB', 'WR', 'TE', 'CB', 'S', 'DL', 'LB', 'OL', 'K']
+  let offNight: RecapPlayer | undefined
+  for (const pos of offNightPriority) {
+    offNight = players.find((p) => p.position === pos && p.grade === 'F')
+    if (offNight) break
+  }
+  if (offNight) {
+    paragraphs.push(
+      `${offNight.firstName} ${offNight.lastName} really wasn't on his A game this week - the kind of performance the coaching staff will want cleaned up, or a spot worth re-evaluating at the position if it becomes a pattern.`,
+    )
+  }
+
+  return paragraphs
+}
