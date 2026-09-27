@@ -2255,7 +2255,6 @@ function TradeOfferRow({
 interface StatLeaderRow {
   playerId: number
   value: number
-  extra?: number
 }
 
 function HistoryView({
@@ -2383,20 +2382,20 @@ function StatsLeadersView({
     totals.set(s.playerId, t)
   }
 
-  const topBy = (statKey: keyof StatTotals, extraKey?: keyof StatTotals): StatLeaderRow[] =>
+  const topBy = (statKey: keyof StatTotals): StatLeaderRow[] =>
     [...totals.entries()]
-      .map(([playerId, t]) => ({ playerId, value: t[statKey], extra: extraKey ? t[extraKey] : undefined }))
+      .map(([playerId, t]) => ({ playerId, value: t[statKey] }))
       .filter((r) => r.value > 0)
       .sort((a, b) => b.value - a.value)
       .slice(0, 5)
 
   const categories: { title: string; unit: string; rows: StatLeaderRow[] }[] = [
-    { title: 'Passing Yards', unit: 'yds', rows: topBy('passYards', 'passTDs') },
+    { title: 'Passing Yards', unit: 'yds', rows: topBy('passYards') },
     { title: 'Passing TDs', unit: 'TD', rows: topBy('passTDs') },
     { title: 'Interceptions', unit: 'INT', rows: topBy('interceptions') },
-    { title: 'Rushing Yards', unit: 'yds', rows: topBy('rushYards', 'rushTDs') },
+    { title: 'Rushing Yards', unit: 'yds', rows: topBy('rushYards') },
     { title: 'Rushing TDs', unit: 'TD', rows: topBy('rushTDs') },
-    { title: 'Receiving Yards', unit: 'yds', rows: topBy('recYards', 'recTDs') },
+    { title: 'Receiving Yards', unit: 'yds', rows: topBy('recYards') },
     { title: 'Receiving TDs', unit: 'TD', rows: topBy('recTDs') },
     { title: 'Tackles', unit: 'tkl', rows: topBy('tackles') },
     { title: 'Sacks', unit: 'sacks', rows: topBy('sacks') },
@@ -2434,7 +2433,6 @@ function StatsLeadersView({
                     <td className="py-1 truncate">{nameFor(r.playerId)}</td>
                     <td className="py-1 text-right whitespace-nowrap w-24">
                       {r.value.toLocaleString()} {cat.unit}
-                      {r.extra != null && r.extra > 0 ? ` · ${r.extra} TD` : ''}
                     </td>
                   </tr>
                 ))}
