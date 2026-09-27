@@ -1141,7 +1141,7 @@ function GameReportView({
 
   const graded = myStatLines
     .map((s) => {
-      const tag = classifyGamePerformance(s.position, s)
+      const tag = classifyGamePerformance(s.position, s, weekGrades.get(s.playerId))
       const player = rosterById.get(s.playerId)
       if (!tag || !player) return null
       return { player, tag, blurb: performanceBlurb(s.position, s, tag) }
@@ -1157,9 +1157,13 @@ function GameReportView({
   // but a position that keeps grading out poorly across multiple games is
   // an actual roster weakness worth addressing via free agency or a trade.
   const myTrendStats = seasonStats.filter((s) => s.teamId === userTeamId)
+  const trendGradesByWeek = new Map<number, Map<number, SeasonGrade>>()
+  for (const w of new Set(myTrendStats.map((s) => s.week))) {
+    trendGradesByWeek.set(w, gradeSeasonPerformance(seasonStats.filter((s) => s.week === w)))
+  }
   const positionTrend = new Map<Position, { good: number; bad: number }>()
   for (const s of myTrendStats) {
-    const tag = classifyGamePerformance(s.position, s)
+    const tag = classifyGamePerformance(s.position, s, trendGradesByWeek.get(s.week)?.get(s.playerId))
     if (!tag) continue
     const entry = positionTrend.get(s.position) ?? { good: 0, bad: 0 }
     if (tag === 'good') entry.good++

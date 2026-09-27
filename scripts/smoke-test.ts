@@ -115,8 +115,9 @@ async function assertSeasonSane(leagueId: number, season: number) {
     const reportGame = userGames[userGames.length - 1]
     const reportStats = stats.filter((s) => s.gameId === reportGame.id && s.teamId === userTeamId)
     if (reportStats.length === 0) throw new Error('No player stats found for the user team on their own game')
+    const reportWeekGrades = gradeSeasonPerformance(stats.filter((s) => s.week === reportGame.week))
     const graded = reportStats
-      .map((s) => classifyGamePerformance(s.position, s))
+      .map((s) => classifyGamePerformance(s.position, s, reportWeekGrades.get(s.playerId)))
       .filter((tag): tag is 'good' | 'bad' => tag !== null)
     const isHome = reportGame.homeTeamId === userTeamId
     const myScore = isHome ? reportGame.homeScore : reportGame.awayScore

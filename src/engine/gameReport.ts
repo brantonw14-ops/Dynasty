@@ -1,63 +1,41 @@
 import type { PlayerGameStats, Position } from '../types'
 import { passerRating } from './gameSim'
+import type { SeasonGrade } from './seasonPerformance'
 
 export type GameOutcomeTag = 'good' | 'bad'
 
 /**
- * Whether a single game was clearly a good or bad one for this player, by
- * position-appropriate box score thresholds - mirrors the thresholds
- * inSeasonProgression uses mid-sim, but works off the persisted
- * PlayerGameStats row (post-game report) instead of the transient
- * PlayerBoxScore used while a game is being simulated.
+ * Whether a single game was clearly a good or bad one for this player.
+ * Primarily driven by the same league-wide letter grade (A-F, z-scored
+ * against position peers for that week) shown on the box score - an A
+ * played well, an F played poorly, so the two views of a game agree with
+ * each other instead of using separate ad-hoc thresholds. `weekGrade` is
+ * that grade for this exact stat line (pass `undefined` if none - too few
+ * peers that position/week to grade).
+ *
+ * A couple of position-specific overrides on top of the grade:
+ * - A kicker missing even one extra point is always "bad" - a PAT is a
+ *   routine, near-automatic play in the real league, not a coin flip.
+ * - A kicker who only attempted PATs (no field goals) never grades "good"
+ *   just for being perfect on them - that's the expectation, not a
+ *   standout game.
  */
-export function classifyGamePerformance(position: Position, s: PlayerGameStats): GameOutcomeTag | null {
-  switch (position) {
-    case 'QB': {
-      if (s.passAttempts < 5) return null
-      const rating = passerRating(s.passAttempts, s.passCompletions, s.passYards, s.passTDs, s.interceptions)
-      if (rating >= 105) return 'good'
-      if (rating <= 55) return 'bad'
-      return null
-    }
-    case 'RB': {
-      if (s.rushAttempts < 5) return null
-      const ypc = s.rushYards / s.rushAttempts
-      if (s.rushYards >= 90 || (ypc >= 5 && s.rushTDs >= 1)) return 'good'
-      if (ypc < 2.8 && s.rushAttempts >= 8) return 'bad'
-      return null
-    }
-    case 'WR':
-    case 'TE': {
-      if (s.recYards >= 90 || s.recTDs >= 2) return 'good'
-      return null
-    }
-    case 'OL': {
-      if (s.pancakes >= 5 && s.sacksAllowed === 0) return 'good'
-      if (s.sacksAllowed >= 2) return 'bad'
-      return null
-    }
-    case 'DL':
-    case 'LB': {
-      if (s.sacks >= 1.5 || s.tacklesForLoss >= 3 || s.defInterceptions >= 1) return 'good'
-      return null
-    }
-    case 'CB':
-    case 'S': {
-      if (s.defInterceptions >= 1 || s.passBreakups >= 2) return 'good'
-      if (s.yardsAllowed >= 100) return 'bad'
-      return null
-    }
-    case 'K': {
-      const attempts = s.fieldGoalsAttempted + s.extraPointsAttempted
-      if (attempts === 0) return null
-      const missed = s.fieldGoalsAttempted - s.fieldGoalsMade + (s.extraPointsAttempted - s.extraPointsMade)
-      if (missed === 0) return 'good'
-      if (missed >= 2) return 'bad'
-      return null
-    }
-    default:
-      return null
+export function classifyGamePerformance(
+  position: Position,
+  s: PlayerGameStats,
+  weekGrade?: SeasonGrade,
+): GameOutcomeTag | null {
+  if (position === 'K') {
+    const patMissed = s.extraPointsAttempted - s.extraPointsMade
+    if (patMissed >= 1) return 'bad'
+    if (s.fieldGoalsAttempted === 0) return null
   }
+  if (position === 'QB' && s.passAttempts < 5) return null
+  if (position === 'RB' && s.rushAttempts < 5) return null
+
+  if (weekGrade === 'A') return 'good'
+  if (weekGrade === 'F') return 'bad'
+  return null
 }
 
 /** A one-line human-readable blurb backing up why this performance was tagged good/bad. */

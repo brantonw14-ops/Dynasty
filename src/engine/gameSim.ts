@@ -115,6 +115,14 @@ function pickWeighted<T>(rng: Rng, items: T[], weightFn: (item: T) => number): T
  * the field (and box score) some weeks, less often the further down the
  * depth chart they sit. Picks who plays this game and how big a slice of
  * the work they get, ranked by depth chart order (0 = starter).
+ *
+ * The base `shares` array only encodes depth-slot pecking order (RB1 gets
+ * more than RB2 regardless of how good either one is). `talentPow` lets a
+ * genuine talent gap move volume on top of that: each player's slot share
+ * is scaled by their own overall raised to this power before normalizing,
+ * so an elite starter with a weak backup pulls even further ahead of the
+ * fixed split, and a mediocre "starter" doesn't automatically outproduce a
+ * clearly better backup. 0 disables this (pure slot-based split).
  */
 function activeWithShares(
   rng: Rng,
@@ -124,13 +132,17 @@ function activeWithShares(
   partialChance: number,
   deepChance: number,
   shares: number[],
+  talentPow = 0,
 ): { player: Player; share: number }[] {
   const active = players.filter((_, i) => {
     if (i < alwaysActive) return true
     if (i < alwaysActive + partialCount) return rng() < partialChance
     return rng() < deepChance
   })
-  const rawShares = active.map((_, i) => shares[i] ?? shares[shares.length - 1] * 0.5)
+  const rawShares = active.map((p, i) => {
+    const base = shares[i] ?? shares[shares.length - 1] * 0.5
+    return talentPow > 0 ? base * Math.pow(Math.max(30, p.ratings.overall), talentPow) : base
+  })
   const total = rawShares.reduce((a, b) => a + b, 0) || 1
   return active.map((player, i) => ({ player, share: rawShares[i] / total }))
 }
@@ -251,7 +263,11 @@ function generateOffenseBox(
     }
   }
 
-  const activeRbs = activeWithShares(rng, rbs, 1, 1, 0.6, 0.2, [0.68, 0.22, 0.08, 0.02])
+  // RB3/RB4 are emergency-only in a real NFL game - they basically don't see
+  // the field unless the backfield ahead of them is thinned by injury, which
+  // a near-zero deepChance approximates (some noise for legitimate blowout
+  // garbage-time snaps, not a real rotation).
+  const activeRbs = activeWithShares(rng, rbs, 1, 1, 0.6, 0.03, [0.68, 0.22, 0.08, 0.02], 1.6)
   const activeReceivers = activeWithShares(
     rng,
     receivers,
@@ -260,6 +276,7 @@ function generateOffenseBox(
     0.55,
     0.2,
     [0.3, 0.22, 0.16, 0.12, 0.1, 0.06, 0.04],
+    1.6,
   )
 
   if (activeRbs.length > 0) {
@@ -293,10 +310,12 @@ function generateOffenseBox(
     }
   }
 
-  // Pancake blocks track with how well the run game went; every lineman who
-  // suits up gets a share, weighted toward the starting five.
+  // A real offensive line doesn't rotate - the same 5 starters play every
+  // offensive snap unless one gets hurt during the game (handled by the
+  // separate in-game injury system, not this box-score sim), so exactly the
+  // top 5 by depth chart get pancake credit, nobody else.
   if (ol.length > 0) {
-    const activeOl = activeWithShares(rng, ol, 5, 2, 0.4, 0.15, [1, 1, 1, 1, 1, 0.5, 0.5])
+    const activeOl = activeWithShares(rng, ol, 5, 0, 0, 0, [1, 1, 1, 1, 1], 1.3)
     const pancakePool = Math.max(0, Math.round(rushYards / 12 + randNormal(rng, 0, 2)))
     for (const { player, share } of activeOl) {
       statsFor(player).pancakes += Math.round(pancakePool * share)
@@ -347,7 +366,10 @@ function generateDefenseBox(
   const sacks = Math.min(opponent.passAttempts, Math.round(opponent.passAttempts * sackRate))
   const tfls = Math.max(0, Math.round(rushAttempts * 0.06 + randNormal(rng, 0, 1)))
 
-  const activeFront = activeWithShares(rng, front, 6, 3, 0.5, 0.15, [1, 1, 1, 1, 1, 1, 0.6, 0.6, 0.6])
+  // Front-7 starters (top 7 by depth chart) are on the field for the bulk of
+  // defensive snaps in a real game; rotational depth sees the field less
+  // often, and the deepest bodies on the roster barely at all.
+  const activeFront = activeWithShares(rng, front, 7, 2, 0.4, 0.1, [1, 1, 1, 1, 1, 1, 1, 0.5, 0.5])
   const frontWeight = (p: Player) => Math.pow(p.ratings.overall, 1.8)
   for (let i = 0; i < sacks; i++) {
     statsFor(defenseBox, pickWeighted(rng, activeFront.map((a) => a.player), frontWeight)).sacks += 1
@@ -357,7 +379,9 @@ function generateDefenseBox(
   }
 
   const incompletions = Math.max(0, opponent.passAttempts - opponent.passCompletions - opponent.interceptions)
-  const activeSecondary = activeWithShares(rng, secondary, 4, 2, 0.5, 0.2, [1, 1, 1, 1, 0.6, 0.6])
+  // Same idea in the secondary - the starting 4 (2 CB, 2 S) are out there
+  // for most snaps, with a nickel/dime piece rotating in less often.
+  const activeSecondary = activeWithShares(rng, secondary, 4, 1, 0.45, 0.1, [1, 1, 1, 1, 0.5, 0.5])
   const secondaryWeight = (p: Player) => Math.pow(p.ratings.overall, 1.8)
 
   // The offense's own thrown interceptions are the defense's takeaways.
@@ -410,9 +434,10 @@ function generateDefenseBox(
     statsFor(defenseBox, pickWeighted(rng, activeSecondary.map((a) => a.player), secondaryWeight)).tackles += 1
   }
 
-  // Sacks/TFLs allowed mirror onto the offensive line that gave them up.
+  // Sacks/TFLs allowed mirror onto the offensive line that gave them up -
+  // same top-5-only, no-rotation logic as the pancakes side.
   if (offenseOl.length > 0) {
-    const activeOl = activeWithShares(rng, offenseOl, 5, 2, 0.4, 0.15, [1, 1, 1, 1, 1, 0.5, 0.5])
+    const activeOl = activeWithShares(rng, offenseOl, 5, 0, 0, 0, [1, 1, 1, 1, 1])
     const olWeight = (p: Player) => 1 / Math.max(1, p.ratings.overall - 40)
     for (let i = 0; i < sacks; i++) {
       statsFor(offenseBox, pickWeighted(rng, activeOl.map((a) => a.player), olWeight)).sacksAllowed += 1
