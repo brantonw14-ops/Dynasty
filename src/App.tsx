@@ -832,7 +832,7 @@ function RosterView({
                       <span className="text-yellow-400">{p.ratings.potential} POT</span>
                     </div>
                     <div className="flex items-end justify-between gap-2 mt-1 pt-1 border-t border-slate-800">
-                      <div className="text-gray-400 min-w-0">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
+                      <div className="text-gray-200 min-w-0">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
                       <div className="flex gap-2 shrink-0">
                         <span title={attrLabels[0]} className={attrSlotColor(0)}>
                           {abbrevLabel(attrLabels[0])} {p.ratings.attr1}
@@ -935,7 +935,7 @@ function RosterView({
                         )}
                       </td>
                       <td className="py-1 px-2 text-right">{p.age}</td>
-                      <td className="py-1 px-2 text-right text-gray-400">
+                      <td className="py-1 px-2 text-right text-gray-200">
                         {!p.experience ? 'R' : p.experience}
                       </td>
                       <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
@@ -1138,7 +1138,7 @@ function GameReportView({
             <span className="text-gray-300 font-semibold">{byeRecordLabel}</span>
           </p>
         </div>
-        <p className="text-sm text-gray-400 border rounded p-3">
+        <p className="text-sm text-gray-200 border rounded p-3">
           {teamName(userTeamId)} had a bye in week {selectedEntry.week} - no game was played, nothing to report.
         </p>
       </div>
@@ -1824,7 +1824,7 @@ function TradeView({
                 )}
               </span>
               <span className={`shrink-0 font-semibold ${overallColor(p.ratings.overall)}`}>{p.ratings.overall}</span>
-              <span className="shrink-0 text-gray-400 whitespace-nowrap">
+              <span className="shrink-0 text-gray-200 whitespace-nowrap">
                 {p.contract ? formatMoney(p.contract.salary) : '-'}
               </span>
               {showBlockToggle && (
@@ -3904,7 +3904,11 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
                     </div>
                     <span className="block text-xs text-gray-500 mt-1">
                       {t.conference} {t.division} &middot; {t.overall} OVR &middot; Age{' '}
-                      {t.avgAge} &middot; {formatMoney(t.capSpace)} cap space
+                      {t.avgAge} &middot;{' '}
+                      <span className={`font-semibold ${t.capSpace < 0 ? 'text-red-400' : 'text-orange-400'}`}>
+                        {formatMoney(t.capSpace)}
+                      </span>{' '}
+                      cap space
                     </span>
                   </button>
                 ))}
@@ -3916,8 +3920,11 @@ function NewLeague({ onCreated }: { onCreated: (id: number) => void }) {
       {selected && (
         <p className="text-sm text-gray-500 mb-3">
           {selected.region} {selected.name}: {OUTLOOK_LABELS[selected.outlook]} &middot;{' '}
-          {selected.overall} team overall &middot; {formatMoney(selected.capSpace)} available to
-          spend
+          {selected.overall} team overall &middot;{' '}
+          <span className={`font-semibold ${selected.capSpace < 0 ? 'text-red-400' : 'text-orange-400'}`}>
+            {formatMoney(selected.capSpace)}
+          </span>{' '}
+          available to spend
         </p>
       )}
 
