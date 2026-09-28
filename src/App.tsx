@@ -1562,35 +1562,40 @@ function computeOverallChange(
 
 function DeltaBadge({ before, after }: { before: number; after: number }) {
   const delta = after - before
-  const color = delta > 0 ? 'text-emerald-400' : delta < 0 ? 'text-red-400' : 'text-gray-500'
+  const color = delta > 0 ? 'text-emerald-400' : delta < 0 ? 'text-red-400' : 'text-gray-300'
   return (
-    <span className={color}>
-      {before} → {after} ({delta > 0 ? '+' : ''}
-      {delta})
+    <span className="font-bold whitespace-nowrap">
+      <span className="text-white">{before}</span> <span className="text-gray-400">→</span>{' '}
+      <span className={color}>
+        {after} ({delta > 0 ? '+' : ''}
+        {delta})
+      </span>
     </span>
   )
 }
 
-/** Team overall change plus any position(s) whose overall would shift,
- * shown once per trade card so a user can judge impact beyond raw OVR. */
-function OverallChangeSummary({ change }: { change: OverallChange }) {
-  const posDeltas = Object.entries(change.posAfter).filter(([pos, after]) => after !== change.posBefore[pos])
+/**
+ * Team overall change plus every position involved in the trade (give or
+ * get side), shown as a highlighted panel so the actual roster impact is
+ * front and center instead of a barely-visible footnote. Positions the
+ * trade actually touches always show, even if they round to no change -
+ * "no material change" is itself useful information, not something to hide.
+ */
+function OverallChangeSummary({ change, involvedPositions }: { change: OverallChange; involvedPositions: Set<Position> }) {
+  const posEntries = Object.entries(change.posAfter).filter(
+    ([pos, after]) => involvedPositions.has(pos as Position) || after !== change.posBefore[pos],
+  )
   return (
-    <p className="text-[10px] text-gray-500 mt-1">
-      Team overall: <DeltaBadge before={change.teamBefore} after={change.teamAfter} />
-      {posDeltas.length > 0 && (
-        <>
-          {' '}
-          &middot;{' '}
-          {posDeltas.map(([pos, after], i) => (
-            <span key={pos}>
-              {i > 0 && ', '}
-              {pos}: <DeltaBadge before={change.posBefore[pos]} after={after} />
-            </span>
-          ))}
-        </>
-      )}
-    </p>
+    <div className="mt-2 pt-2 border-t border-slate-700 text-sm flex flex-wrap items-center gap-x-4 gap-y-1">
+      <span className="text-white font-semibold">
+        Team Overall: <DeltaBadge before={change.teamBefore} after={change.teamAfter} />
+      </span>
+      {posEntries.map(([pos, after]) => (
+        <span key={pos} className="text-white font-semibold">
+          {pos}: <DeltaBadge before={change.posBefore[pos]} after={after} />
+        </span>
+      ))}
+    </div>
   )
 }
 
@@ -1604,42 +1609,42 @@ function OverallChangeSummary({ change }: { change: OverallChange }) {
 function TradePlayerCard({ player, statLine }: { player: TradeCardPlayer; statLine: string }) {
   const attrLabels = POSITION_ATTRIBUTES[player.position]
   return (
-    <div className="mb-2 last:mb-0 pb-2 last:pb-0 border-b border-slate-800 last:border-0">
-      <div className="flex items-center gap-1.5">
+    <div className="mb-2.5 last:mb-0 pb-2.5 last:pb-0 border-b border-slate-700 last:border-0">
+      <div className="flex items-center gap-1.5 flex-wrap">
         <span
-          className={`text-[9px] px-1 py-0.5 rounded font-semibold whitespace-nowrap shrink-0 ${
-            player.isStarter ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-300'
+          className={`text-[10px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap shrink-0 ${
+            player.isStarter ? 'bg-green-900 text-green-300' : 'bg-slate-700 text-slate-200'
           }`}
         >
           {player.isStarter ? 'STARTER' : 'BENCH'}
         </span>
-        <span className="font-medium truncate">
+        <span className="font-bold text-white text-base truncate">
           {player.firstName} {player.lastName}
         </span>
       </div>
-      <div className="text-gray-500">
+      <div className="text-gray-300 font-medium mt-0.5">
         {player.position} &middot; {player.age}y
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-        <span className={overallColor(player.overall)}>{player.overall} OVR</span>
-        <span className="text-yellow-400">{player.potential} POT</span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
+        <span className={`font-bold ${overallColor(player.overall)}`}>{player.overall} OVR</span>
+        <span className="font-bold text-yellow-400">{player.potential} POT</span>
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-        <span title={attrLabels[0]} className={overallColor(player.attr1)}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
+        <span title={attrLabels[0]} className={`font-semibold ${overallColor(player.attr1)}`}>
           {abbrevLabel(attrLabels[0])} {player.attr1}
         </span>
-        <span title={attrLabels[1]} className={overallColor(player.attr2)}>
+        <span title={attrLabels[1]} className={`font-semibold ${overallColor(player.attr2)}`}>
           {abbrevLabel(attrLabels[1])} {player.attr2}
         </span>
-        <span title={attrLabels[2]} className={overallColor(player.attr3)}>
+        <span title={attrLabels[2]} className={`font-semibold ${overallColor(player.attr3)}`}>
           {abbrevLabel(attrLabels[2])} {player.attr3}
         </span>
       </div>
-      <div className="text-gray-400 whitespace-nowrap mt-0.5">
+      <div className="text-gray-200 font-semibold whitespace-nowrap mt-1">
         {formatMoney(player.salary)}
         {player.yearsLeft != null && ` · ${player.yearsLeft}yr`}
       </div>
-      {statLine !== '-' && <div className="text-gray-500 mt-0.5">{statLine}</div>}
+      {statLine !== '-' && <div className="text-gray-300 mt-1">{statLine}</div>}
     </div>
   )
 }
@@ -1935,9 +1940,9 @@ function TradeView({
   return (
     <div>
       {suggestedTrades && (
-        <div className="mb-6 border border-emerald-800 rounded p-3 bg-emerald-950/30">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-emerald-300">
+        <div className="mb-6 border border-emerald-800 rounded-lg p-3 bg-emerald-950/40">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-base font-bold text-emerald-300">
               Trade Offers ({suggestedTrades.length})
             </h3>
             <button
@@ -1945,13 +1950,13 @@ function TradeView({
                 setSuggestionSeed((n) => n + 1)
                 setSuggestionResult(null)
               }}
-              className="px-2 py-1 border border-emerald-700 text-emerald-300 rounded text-[11px] hover:bg-emerald-900/50"
+              className="px-2.5 py-1.5 border border-emerald-700 text-emerald-300 font-bold rounded text-sm hover:bg-emerald-900/50"
             >
               Refresh Trades
             </button>
           </div>
           {suggestedTrades.length === 0 && (
-            <p className="text-xs text-gray-500">No fresh suggestions right now - try refreshing or check back after a few weeks.</p>
+            <p className="text-sm text-gray-300">No fresh suggestions right now - try refreshing or check back after a few weeks.</p>
           )}
           <div className="flex flex-col gap-2">
             {suggestedTrades.map((s) => {
@@ -1960,31 +1965,32 @@ function TradeView({
               const getSalary = s.get.reduce((sum, p) => sum + p.salary, 0)
               const netSalary = getSalary - giveSalary
               const overallChange = computeOverallChange(myRoster, s.giveIds, s.get)
+              const involvedPositions = new Set<Position>([...s.give.map((p) => p.position), ...s.get.map((p) => p.position)])
               return (
-                <div key={key} className="border-b border-emerald-900 pb-2 last:border-0 last:pb-0">
-                  <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
+                <div key={key} className="rounded-lg bg-slate-800/70 border border-emerald-900 p-3 mb-3 last:mb-0">
+                  <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
                     <span>
-                      <span className="text-emerald-300 font-medium">{teamName(s.otherTeamId)}</span>
-                      <span className="text-gray-400"> &middot; {s.reason}</span>
+                      <span className="text-emerald-300 font-bold text-base">{teamName(s.otherTeamId)}</span>
+                      <span className="text-gray-200 font-medium"> &middot; {s.reason}</span>
                     </span>
                     <div className="flex items-center gap-2 shrink-0">
                       {suggestionResult?.key === key && (
-                        <span className={suggestionResult.accepted ? 'text-emerald-400' : 'text-red-400'}>
+                        <span className={`font-bold ${suggestionResult.accepted ? 'text-emerald-400' : 'text-red-400'}`}>
                           {suggestionResult.accepted ? 'Done!' : suggestionResult.reason}
                         </span>
                       )}
                       <button
                         onClick={() => handleMakeSuggestion(s, key)}
                         disabled={makingSuggestionKey === key}
-                        className="px-2 py-1 bg-emerald-600 text-white rounded text-[11px] disabled:opacity-50"
+                        className="px-3 py-1.5 bg-emerald-600 text-white font-bold rounded text-sm disabled:opacity-50"
                       >
                         {makingSuggestionKey === key ? 'Trading...' : 'Make Trade'}
                       </button>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px]">
-                    <div className="bg-black/20 rounded px-2 py-1.5">
-                      <div className="text-red-400 font-semibold mb-1">You Send</div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="bg-black/30 rounded p-2.5">
+                      <div className="text-red-400 font-bold mb-1.5">You Send</div>
                       {s.give.map((p, i) => (
                         <TradePlayerCard key={s.giveIds[i]} player={p} statLine={statLineFor(s.giveIds[i], p.position)} />
                       ))}
@@ -1993,7 +1999,7 @@ function TradeView({
                           {s.givePicks.map((r) => (
                             <span
                               key={pickRefKey(r)}
-                              className="px-1.5 py-0.5 rounded border border-blue-700 bg-blue-900/40 text-blue-200 text-[10px]"
+                              className="px-1.5 py-0.5 rounded border border-blue-700 bg-blue-900/40 text-blue-200 font-semibold text-xs"
                               title={pickLabel(r, userTeamId, abbrev)}
                             >
                               + {r.year} R{r.round}
@@ -2002,20 +2008,20 @@ function TradeView({
                         </div>
                       )}
                     </div>
-                    <div className="bg-black/20 rounded px-2 py-1.5">
-                      <div className="text-emerald-400 font-semibold mb-1">You Get</div>
+                    <div className="bg-black/30 rounded p-2.5">
+                      <div className="text-emerald-400 font-bold mb-1.5">You Get</div>
                       {s.get.map((p, i) => (
                         <TradePlayerCard key={s.getIds[i]} player={p} statLine={statLineFor(s.getIds[i], p.position)} />
                       ))}
                     </div>
                   </div>
-                  <p className="text-[10px] text-gray-500 mt-1">
+                  <p className="text-sm text-gray-200 font-medium mt-2">
                     Net cap impact:{' '}
-                    <span className={netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-400'}>
+                    <span className={`font-bold ${netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-300'}`}>
                       {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
                     </span>
                   </p>
-                  <OverallChangeSummary change={overallChange} />
+                  <OverallChangeSummary change={overallChange} involvedPositions={involvedPositions} />
                 </div>
               )
             })}
@@ -2024,9 +2030,9 @@ function TradeView({
       )}
 
       {pendingOffers.length > 0 && (
-        <div className="mb-6 border border-blue-800 rounded p-3 bg-blue-950/30">
-          <h3 className="text-sm font-semibold text-blue-300 mb-2">Incoming Trade Offers ({pendingOffers.length})</h3>
-          <div className="flex flex-col gap-2">
+        <div className="mb-6 border border-blue-800 rounded-lg p-3 bg-blue-950/40">
+          <h3 className="text-base font-bold text-blue-300 mb-3">Incoming Trade Offers ({pendingOffers.length})</h3>
+          <div className="flex flex-col gap-3">
             {pendingOffers.map((offer) => (
               <TradeOfferRow
                 key={offer.id}
@@ -2191,31 +2197,32 @@ function TradeOfferRow({
     requestPlayers.map((p) => p.id),
     offerPlayers.map((p) => ({ position: p.position, overall: p.ratings.overall })),
   )
+  const involvedPositions = new Set<Position>([...requestPlayers.map((p) => p.position), ...offerPlayers.map((p) => p.position)])
 
   return (
-    <div className="border border-blue-900 rounded p-2">
-      <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
-        <span className="text-blue-300 font-medium">{teamName(offer.fromTeamId)} wants to make a deal</span>
+    <div className="rounded-lg bg-slate-800/70 border border-blue-900 p-3">
+      <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+        <span className="text-blue-300 font-bold text-base">{teamName(offer.fromTeamId)} wants to make a deal</span>
         <div className="flex gap-2 shrink-0">
           <button
             onClick={() => onRespond(true)}
             disabled={responding}
-            className="px-3 py-1 bg-green-600 text-white rounded text-xs disabled:opacity-50"
+            className="px-3 py-1.5 bg-green-600 text-white font-bold rounded text-sm disabled:opacity-50"
           >
             Accept
           </button>
           <button
             onClick={() => onRespond(false)}
             disabled={responding}
-            className="px-3 py-1 border rounded text-xs disabled:opacity-50"
+            className="px-3 py-1.5 border border-gray-500 text-white font-bold rounded text-sm disabled:opacity-50"
           >
             Decline
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
-        <div className="bg-black/20 rounded px-2 py-1.5">
-          <div className="text-red-400 font-semibold mb-1">You Send</div>
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        <div className="bg-black/30 rounded p-2.5">
+          <div className="text-red-400 font-bold mb-1.5">You Send</div>
           {requestPlayers.map((p) => (
             <TradePlayerCard key={p.id} player={toCard(p, userRoster)} statLine={statLineFor(p.id, p.position)} />
           ))}
@@ -2227,8 +2234,8 @@ function TradeOfferRow({
             </div>
           )}
         </div>
-        <div className="bg-black/20 rounded px-2 py-1.5">
-          <div className="text-emerald-400 font-semibold mb-1">You Get</div>
+        <div className="bg-black/30 rounded p-2.5">
+          <div className="text-emerald-400 font-bold mb-1.5">You Get</div>
           {offerPlayers.map((p) => (
             <TradePlayerCard key={p.id} player={toCard(p, fromRoster)} statLine={statLineFor(p.id, p.position)} />
           ))}
@@ -2241,13 +2248,13 @@ function TradeOfferRow({
           )}
         </div>
       </div>
-      <p className="text-[10px] text-gray-500 mt-1">
+      <p className="text-sm text-gray-200 font-medium mt-2">
         Net cap impact:{' '}
-        <span className={netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-400'}>
+        <span className={`font-bold ${netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-300'}`}>
           {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
         </span>
       </p>
-      <OverallChangeSummary change={overallChange} />
+      <OverallChangeSummary change={overallChange} involvedPositions={involvedPositions} />
     </div>
   )
 }
