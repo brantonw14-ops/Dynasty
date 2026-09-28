@@ -618,7 +618,10 @@ export async function openFreeAgency(leagueId: number) {
 export function estimateFreeAgentAsk(season: number, player: Player): { salary: number; years: number } {
   const rng = createRng(season * 7919 + player.id)
   const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age) * (0.9 + rng() * 0.25))
-  const years = 1 + Math.floor(rng() * 3)
+  // A real free-agent ask is rarely a 1-year "prove it" deal - matches the
+  // multi-year length AI signings use (freeAgency.ts), so the user isn't
+  // stuck re-signing far more of the roster every season than the AI does.
+  const years = 2 + Math.floor(rng() * 3)
   return { salary, years }
 }
 

@@ -64,7 +64,13 @@ export function expireContractsWithAiRetention(rng: Rng, players: Player[], user
       const committed = committedByTeam.get(p.teamId) ?? 0
       if (committed + newSalary <= SALARY_CAP * 0.95) {
         committedByTeam.set(p.teamId, committed + newSalary)
-        return { ...p, contract: { salary: newSalary, yearsLeft: randInt(rng, 1, 3) } }
+        // A real re-signed veteran usually gets a multi-year deal, not a
+        // prove-it 1-year prove-it deal - randInt(1,3) here (average ~2
+        // years) meant roughly half the whole non-rookie roster expired
+        // every single season on contract length alone, on top of
+        // retirements, flooding free agency and gutting roster continuity
+        // far beyond real NFL turnover.
+        return { ...p, contract: { salary: newSalary, yearsLeft: randInt(rng, 2, 4) } }
       }
     }
 
@@ -136,7 +142,9 @@ export function runFreeAgency(
       const signedPlayer = {
         ...player,
         teamId,
-        contract: { salary, yearsLeft: randInt(rng, 1, 3) },
+        // Same reasoning as the AI retention signing above: a real free
+        // agent deal is rarely just 1 year.
+        contract: { salary, yearsLeft: randInt(rng, 2, 4) },
         depthOrder: nextDepthOrder(teamRoster, player.position),
       }
       teamRoster.push(signedPlayer)
