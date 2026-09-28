@@ -2994,6 +2994,12 @@ function DraftView({
   if (board === null) return <p className="text-sm text-gray-500">No draft in progress.</p>
 
   const userNeeds = new Set(rosterNeeds(userRoster))
+  const capSpace = computeCapSpace(userRoster)
+  // Same below-market rookie-deal formula prospectToPlayer actually signs
+  // at (draft.ts) - shown up front so a pick's cost is known before it's
+  // made, not just discovered after.
+  const estimateRookieSalary = (p: { position: Position; ratings: { overall: number }; age: number }) =>
+    Math.round(marketSalary(p.position, p.ratings.overall, p.age) * 0.35)
   const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
   const filtered = positionFilter ? available.filter((p) => p.position === positionFilter) : available
   const sorted = sortRows(
@@ -3066,6 +3072,19 @@ function DraftView({
           {simming ? 'Simming...' : 'Sim Rest of Draft'}
         </button>
       </div>
+
+      {userTeamId != null && (
+        <p className="text-sm text-gray-500 mb-2">
+          Roster{' '}
+          <span className="font-semibold text-white">{userRoster.length}/{MIN_ROSTER_SIZE}</span>
+          {' '}&middot;{' '}
+          <InfoTip label="Cap space" tip="How much salary you can still add before hitting the league salary cap - every rookie's contract counts against this the moment you draft them." />
+          {': '}
+          <span className={`font-semibold ${capSpace < 0 ? 'text-red-400' : 'text-orange-400'}`}>
+            {formatMoney(capSpace)}
+          </span>
+        </p>
+      )}
 
       {!board.isUserTurn && board.currentTeamId != null && (
         <p className="text-xs text-gray-500 mb-3">Waiting on {teamName(board.currentTeamId)} to pick...</p>
@@ -3201,6 +3220,8 @@ function DraftView({
           <div className="sm:hidden flex flex-col gap-2">
             {sorted.map((p) => {
               const needed = userNeeds.has(p.position)
+              const rookieSalary = estimateRookieSalary(p)
+              const tooExpensive = userTeamId != null && rookieSalary > capSpace
               return (
                 <div key={p.index} className="border border-slate-800 rounded-md p-2 text-xs">
                   <div className="flex items-center justify-between gap-2">
@@ -3225,6 +3246,9 @@ function DraftView({
                     <span>Age {p.age}</span>
                     <span className={overallColor(p.ratings.overall)}>{p.ratings.overall} OVR</span>
                     <span className="text-yellow-400">{p.ratings.potential} POT</span>
+                    <span className={tooExpensive ? 'text-red-400 font-semibold' : 'text-orange-400'}>
+                      ~{formatMoney(rookieSalary)}/yr
+                    </span>
                   </div>
                   <div className="text-gray-400 mt-0.5">
                     {p.college} <span className="text-gray-500">· {COLLEGE_TIER_LABELS[p.collegeTier]}</span>
@@ -3250,6 +3274,9 @@ function DraftView({
               <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="pr-4 text-right" />
               <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="pr-4 text-right" tip={OVR_TIP} />
               <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="pr-4 text-right" tip={POT_TIP} />
+              <th className="py-1 pr-4 text-right">
+                <InfoTip label="Rookie $" tip="Estimated below-market rookie-deal salary - what this pick would cost against your cap, every year of the 4-year deal." />
+              </th>
               <SortHeader label="College" sortKey="college" sort={sort} setSort={setSort} className="pr-4" />
               <th className="py-1 pr-4">College Stats</th>
               <th className="py-1 pr-4">Scouting Report</th>
@@ -3259,6 +3286,8 @@ function DraftView({
           <tbody>
             {sorted.map((p) => {
               const needed = userNeeds.has(p.position)
+              const rookieSalary = estimateRookieSalary(p)
+              const tooExpensive = userTeamId != null && rookieSalary > capSpace
               return (
                 <tr key={p.index} className="border-b align-top">
                   <td className="py-1 pr-4 whitespace-nowrap">
@@ -3273,6 +3302,12 @@ function DraftView({
                   <td className="py-1 pr-4 text-right">{p.age}</td>
                   <td className={`py-1 pr-4 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
                   <td className="py-1 pr-4 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
+                  <td
+                    className={`py-1 pr-4 text-right font-semibold whitespace-nowrap ${tooExpensive ? 'text-red-400' : 'text-orange-400'}`}
+                    title={tooExpensive ? "More than your current cap space - you'll need to cut/restructure first" : undefined}
+                  >
+                    {formatMoney(rookieSalary)}
+                  </td>
                   <td className="py-1 pr-4 whitespace-nowrap">
                     {p.college}
                     <div className="text-[10px] text-gray-500">{COLLEGE_TIER_LABELS[p.collegeTier]}</div>
@@ -3293,7 +3328,7 @@ function DraftView({
             })}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={9} className="text-sm text-gray-500 py-2">
+                <td colSpan={10} className="text-sm text-gray-500 py-2">
                   {positionFilter ? `No ${positionFilter} prospects left on the board.` : 'No prospects left on the board.'}
                 </td>
               </tr>
