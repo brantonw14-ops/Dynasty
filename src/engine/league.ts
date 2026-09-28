@@ -24,6 +24,7 @@ import {
   isStarterInRoster,
   MIN_ROSTER_SIZE,
   nextDepthOrder,
+  ROSTER_SHAPE,
   rosterNeeds,
   type TeamOutlook,
 } from './players'
@@ -1379,77 +1380,93 @@ function toSuggestedTradePlayer(p: Player, roster: Player[]): SuggestedTradePlay
 }
 
 /**
- * Tries to find a package of the user's players (1 or 2, cheapest-value
- * first) - optionally with up to 2 owned picks stacked on top as a
- * sweetener - that the AI side (`theirRoster`) would actually accept in
- * exchange for `getSet`. Returns the smallest package that works, or null
- * if nothing tried gets there. This is what lets a suggestion be "2 of your
- * depth guys" or "1 guy + a pick" instead of always exactly one-for-one.
+ * Weighted pool of "how many total players should this suggested trade
+ * involve (both sides combined)". Skewed toward the middle so most deals
+ * read as real multi-player trades - averages ~6 total players, with some
+ * as small as 3 and some as large as 10 - rather than defaulting to the
+ * smallest package that happens to clear the fairness bar.
  */
-function tryGivePackage(
+const TRADE_SIZE_POOL = [3, 4, 4, 5, 5, 5, 6, 6, 6, 6, 7, 7, 8, 9, 10]
+
+/**
+ * Builds a big multi-player (and optionally multi-pick) package: several
+ * of their players (`getSet`) for several of ours (`give`), sized by
+ * `totalSize` (split roughly 40/60 between their side and ours), padding
+ * with more of our depth pieces and then owned picks until the AI's own
+ * evaluateTrade check accepts it. Extra value on top of an already-accepted
+ * offer can never break their acceptance, so padding is always safe - it
+ * just costs us a bit more surplus than the bare minimum would have.
+ */
+function buildBigPackage(
   theirRoster: Player[],
-  getSet: Player[],
-  give: Player[],
+  theirNeeds: Set<Position>,
+  theirCandidates: Player[],
+  usedTheirIds: Set<number>,
+  primaryTarget: Player,
+  wouldUpgradeMe: (p: Player) => boolean,
+  mySurplus: Player[],
   myRoster: Player[],
   picksAvailable: TradePickRef[],
   season: number,
-): { give: Player[]; picks: TradePickRef[] } | null {
-  if (!wouldFitUnderCap(myRoster, give.map((p) => p.id), getSet)) return null
-  if (evaluateTrade(theirRoster, getSet, give).accepted) return { give, picks: [] }
+  totalSize: number,
+): { give: Player[]; picks: TradePickRef[]; get: Player[] } | null {
+  const getCount = Math.max(1, Math.min(4, Math.round(totalSize * 0.4)))
+  const getSet = [primaryTarget]
+  for (const candidate of theirCandidates) {
+    if (getSet.length >= getCount) break
+    if (candidate.id === primaryTarget.id || usedTheirIds.has(candidate.id)) continue
+    if (theirNeeds.has(candidate.position)) continue
+    if (!wouldUpgradeMe(candidate)) continue
+    getSet.push(candidate)
+  }
 
+  const giveCount = Math.max(1, totalSize - getSet.length)
+  const give: Player[] = mySurplus.slice(0, giveCount)
+  if (give.length === 0) return null
+
+  // Never let a suggestion drop the user below a startable 53-man roster
+  // or leave them with zero players at a position the roster shape
+  // requires - a package that "works" by value is meaningless if it would
+  // strip the team unplayable.
+  const rosterOkAfterGive = (give: Player[]): boolean => {
+    if (!wouldFitUnderCap(myRoster, give.map((p) => p.id), getSet)) return false
+    const leavingIds = new Set(give.map((p) => p.id))
+    const resulting = [...myRoster.filter((p) => !leavingIds.has(p.id)), ...getSet]
+    if (resulting.length < MIN_ROSTER_SIZE) return false
+    const counts = new Map<string, number>()
+    for (const p of resulting) counts.set(p.position, (counts.get(p.position) ?? 0) + 1)
+    for (const position of Object.keys(ROSTER_SHAPE) as (keyof typeof ROSTER_SHAPE)[]) {
+      if ((counts.get(position) ?? 0) === 0 && ROSTER_SHAPE[position] > 0) return false
+    }
+    return true
+  }
+
+  if (!rosterOkAfterGive(give)) return null
+
+  if (evaluateTrade(theirRoster, getSet, give).accepted) return { give, picks: [], get: getSet }
+
+  // Not enough value yet - pad with more of our depth first (keeps it
+  // players-for-players rather than reaching for picks immediately).
+  let extraIdx = give.length
+  while (extraIdx < mySurplus.length && give.length < giveCount + 2) {
+    const extra = mySurplus[extraIdx]
+    extraIdx++
+    if (give.some((p) => p.id === extra.id)) continue
+    if (!rosterOkAfterGive([...give, extra])) continue
+    give.push(extra)
+    if (evaluateTrade(theirRoster, getSet, give).accepted) return { give, picks: [], get: getSet }
+  }
+
+  // Still short - stack owned picks on top as a sweetener.
   let picks: TradePickRef[] = []
   let sweetenerValue = 0
   for (const pick of picksAvailable) {
     sweetenerValue += pickValue(pick.round, pick.year - season)
     picks = [...picks, pick]
-    if (evaluateTrade(theirRoster, getSet, give, 0, sweetenerValue).accepted) return { give, picks }
-    if (picks.length >= 2) break // don't sweeten with more than 2 picks
+    if (evaluateTrade(theirRoster, getSet, give, 0, sweetenerValue).accepted) return { give, picks, get: getSet }
+    if (picks.length >= 2) break
   }
   return null
-}
-
-function findAcceptablePackage(
-  theirRoster: Player[],
-  getSet: Player[],
-  giveCandidates: Player[],
-  myRoster: Player[],
-  picksAvailable: TradePickRef[],
-  season: number,
-  preferPairs = false,
-): { give: Player[]; picks: TradePickRef[] } | null {
-  const trySingles = () => {
-    // Try every surplus player, cheapest-value first, so a modest depth
-    // piece is preferred whenever it's actually enough on its own - no cap
-    // here, a roster is small enough that this is cheap.
-    for (const g of giveCandidates) {
-      const result = tryGivePackage(theirRoster, getSet, [g], myRoster, picksAvailable, season)
-      if (result) return result
-    }
-    return null
-  }
-
-  const tryPairs = () => {
-    // A single surplus piece alone often isn't enough for a real upgrade
-    // target, so this is where most matches actually get found - capped to
-    // a generous pool (not just the very cheapest) so a high-value target
-    // still has a shot at a package that reaches it.
-    const pool = giveCandidates.slice(0, 25)
-    for (let i = 0; i < pool.length; i++) {
-      for (let j = i + 1; j < pool.length; j++) {
-        const result = tryGivePackage(theirRoster, getSet, [pool[i], pool[j]], myRoster, picksAvailable, season)
-        if (result) return result
-      }
-    }
-    return null
-  }
-
-  // Singles always winning whenever one happens to suffice made real
-  // multi-player packages rare - a single depth piece is "acceptable" far
-  // more often than it's the most realistic offer. Most of the time, try
-  // bundling a real package first and only fall back to a single piece if
-  // no pair works at all.
-  if (preferPairs) return tryPairs() ?? trySingles()
-  return trySingles() ?? tryPairs()
 }
 
 /**
@@ -1521,7 +1538,7 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
     const state: TeamState = {
       theirRoster,
       theirNeeds: new Set(rosterNeeds(theirRoster)),
-      theirCandidates: shuffle([...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 15), rng),
+      theirCandidates: shuffle([...theirRoster].sort((a, b) => b.ratings.overall - a.ratings.overall).slice(0, 25), rng),
       usedTheirIds: new Set<number>(),
       added: 0,
     }
@@ -1553,55 +1570,27 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
         .sort((a, b) => playerValue(a) - playerValue(b))
       const picksAvailable = allMyPicks.filter((r) => !usedPickKeys.has(pickKey(r)))
 
-      // Bias toward real multi-player packages most of the time - a single
-      // depth piece "working" (being enough by value) doesn't mean it's the
-      // most realistic offer, and always preferring singles made the whole
-      // suggestion list read as one-for-one trades far more than a real
-      // league's trade mix.
-      const preferPairs = rng() < 0.65
-      let getSet = [theirs]
-      let result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season, preferPairs)
-
-      let bundledSecond: Player | null = null
-      if (!result) {
-        // A single-target package didn't work - see if bundling a second,
-        // lesser target from the same team (also an upgrade, also not
-        // needed by them) makes the numbers work as a 2-for-something deal.
-        bundledSecond =
-          theirCandidates.find(
-            (c) =>
-              c.id !== theirs.id &&
-              !usedTheirIds.has(c.id) &&
-              !theirNeeds.has(c.position) &&
-              wouldUpgradeMe(c),
-          ) ?? null
-        if (bundledSecond) {
-          getSet = [theirs, bundledSecond]
-          result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season, preferPairs)
-        }
-      }
+      // Real trades are almost never a plain 1-for-1 - build a genuinely
+      // big multi-player (and sometimes multi-pick) package sized off a
+      // weighted pool that averages ~6 total players across both sides,
+      // occasionally as many as 10.
+      const totalSize = TRADE_SIZE_POOL[Math.floor(rng() * TRADE_SIZE_POOL.length)]
+      const result = buildBigPackage(
+        theirRoster,
+        theirNeeds,
+        theirCandidates,
+        usedTheirIds,
+        theirs,
+        wouldUpgradeMe,
+        mySurplus,
+        myRoster,
+        picksAvailable,
+        league.season,
+        totalSize,
+      )
 
       if (!result) continue
-
-      // A single-give, no-picks match technically "worked" by value, but
-      // presenting it bare made almost every suggestion read as a plain
-      // 1-for-1 trade regardless of the preferPairs bias above (a cheap
-      // single piece is "acceptable" far more often than a pair is, so it
-      // kept winning even when tryPairs was attempted first and failed).
-      // Staple on one more low-cost piece - a spare surplus player or an
-      // unused owned pick - whenever one exists: extra value only makes
-      // the other side happier, so it can never break their acceptance.
-      if (result.give.length + result.picks.length < 2 && rng() < 0.85) {
-        const usedInDeal = new Set(result.give.map((p) => p.id))
-        const usedPickKeysInDeal = new Set(result.picks.map(pickKey))
-        const extraPick = picksAvailable.find((r) => !usedPickKeysInDeal.has(pickKey(r)))
-        const extraPlayer = mySurplus.find((p) => !usedInDeal.has(p.id))
-        if (extraPick) {
-          result = { give: result.give, picks: [...result.picks, extraPick] }
-        } else if (extraPlayer) {
-          result = { give: [...result.give, extraPlayer], picks: result.picks }
-        }
-      }
+      const getSet = result.get
 
       const reasonFor = (p: Player) => {
         const best = myBestAt(p.position)
@@ -1618,8 +1607,8 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
         getIds: getSet.map((p) => p.id),
         givePicks: result.picks,
         reason:
-          [reasonFor(theirs), bundledSecond ? reasonFor(bundledSecond) : null].filter(Boolean).join(' + ') +
-          (result.picks.length > 0 ? ` · needs ${result.picks.length > 1 ? 'picks' : 'a pick'} added to close the gap` : ''),
+          [reasonFor(theirs), ...getSet.slice(1).map((p) => `+ ${p.firstName} ${p.lastName}`)].join(' ') +
+          (result.picks.length > 0 ? ` · picks included to close the gap` : ''),
       })
       result.give.forEach((p) => usedGiveIds.add(p.id))
       result.picks.forEach((r) => usedPickKeys.add(pickKey(r)))
