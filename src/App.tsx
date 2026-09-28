@@ -31,6 +31,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
+import { computeTeamStats } from './engine/teamStats'
 import { buildCoachReport, buildGameHeadlines, buildGameRecap, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
 import {
   computePositionOverall,
@@ -367,6 +368,7 @@ const TAB_DESCRIPTIONS: Record<string, string> = {
   gamereport: 'A box score and per-player grades for any game you’ve played, so you can see what actually went wrong (or right).',
   trade: 'Propose trades with any team, respond to offers sent to you, and check computer-suggested trades that would upgrade your team.',
   freeagents: 'Unsigned players available to sign right now - sorted by overall so the best players are easy to find.',
+  teamstats: 'Team-level offense, defense, and turnover stats for the current season - your team at a glance, then every team sortable.',
   stats: 'League-wide statistical leaders for the current season.',
   history: 'Every past season’s champion and final standings.',
 }
@@ -2337,6 +2339,128 @@ function HistoryView({
   )
 }
 
+/**
+ * Team-level season stats: offense/defense yards, points for/against, and
+ * turnover margin - a level up from StatsLeadersView's individual player
+ * leaderboards. The user's own team is pinned at the top as an at-a-glance
+ * card, then every team is sortable by any column below.
+ */
+function TeamStatsView({ leagueId, season, userTeamId }: { leagueId: number; season: number; userTeamId: number | null }) {
+  const games = useLiveQuery(
+    () => db.games.where('leagueId').equals(leagueId).and((g) => g.season === season && !g.round).toArray(),
+    [leagueId, season],
+  )
+  const stats = useLiveQuery(
+    () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
+    [leagueId, season],
+  )
+  const teams = useLiveQuery(() => db.teams.toArray(), [])
+  const [sort, setSort] = useState<SortState>({ key: 'pf', dir: 'desc' })
+
+  if (!games || !stats || !teams) return <p className="text-sm text-gray-500">Loading team stats...</p>
+
+  const teamById = new Map(teams.map((t) => [t.id, t]))
+  const teamStats = computeTeamStats(
+    teams.map((t) => t.id),
+    games,
+    stats,
+  ).filter((t) => t.gamesPlayed > 0)
+
+  const withPerGame = teamStats.map((t) => ({
+    ...t,
+    offYardsPerGame: t.offYards / t.gamesPlayed,
+    defYardsAllowedPerGame: t.defYardsAllowed / t.gamesPlayed,
+    pointsForPerGame: t.pointsFor / t.gamesPlayed,
+    pointsAgainstPerGame: t.pointsAgainst / t.gamesPlayed,
+  }))
+
+  const userStats = userTeamId != null ? withPerGame.find((t) => t.teamId === userTeamId) : undefined
+
+  const sorted = sortRows(
+    withPerGame,
+    sort,
+    (t, key) => {
+      if (key === 'team') return teamById.get(t.teamId)?.name ?? ''
+      if (key === 'off') return t.offYardsPerGame
+      if (key === 'def') return t.defYardsAllowedPerGame
+      if (key === 'pf') return t.pointsForPerGame
+      if (key === 'pa') return t.pointsAgainstPerGame
+      if (key === 'margin') return t.turnoverMargin
+      return t.pointsForPerGame
+    },
+    (t) => t.pointsForPerGame,
+  )
+
+  if (teamStats.length === 0) {
+    return <p className="text-sm text-gray-500">No games played yet this season - team stats will show up here once you do.</p>
+  }
+
+  const statCard = (label: string, value: string, colorClass: string) => (
+    <div className="border border-slate-800 rounded-md px-3 py-2 text-center sm:text-left">
+      <div className={`text-lg font-semibold ${colorClass}`}>{value}</div>
+      <div className="text-[11px] text-gray-500">{label}</div>
+    </div>
+  )
+
+  return (
+    <div>
+      {userStats && (
+        <div className="mb-6">
+          <h3 className="text-sm font-semibold text-gray-500 mb-2">Your Team</h3>
+          <div className="grid grid-cols-3 sm:flex sm:items-center gap-2 sm:gap-4">
+            {statCard('Off Yds/G', userStats.offYardsPerGame.toFixed(1), 'text-emerald-400')}
+            {statCard('Def Yds Allowed/G', userStats.defYardsAllowedPerGame.toFixed(1), 'text-red-400')}
+            {statCard('Points For/G', userStats.pointsForPerGame.toFixed(1), 'text-emerald-400')}
+            {statCard('Points Against/G', userStats.pointsAgainstPerGame.toFixed(1), 'text-red-400')}
+            {statCard(
+              'Turnover Margin',
+              userStats.turnoverMargin > 0 ? `+${userStats.turnoverMargin}` : `${userStats.turnoverMargin}`,
+              userStats.turnoverMargin > 0 ? 'text-emerald-400' : userStats.turnoverMargin < 0 ? 'text-red-400' : 'text-white',
+            )}
+          </div>
+        </div>
+      )}
+
+      <h3 className="text-sm font-semibold text-gray-500 mb-2">All Teams</h3>
+      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="text-sm border-collapse data-table w-full">
+        <thead>
+          <tr className="text-left text-gray-400 border-b">
+            <SortHeader label="Team" sortKey="team" sort={sort} setSort={setSort} className="pr-4" />
+            <SortHeader label="Off Yds/G" sortKey="off" sort={sort} setSort={setSort} className="pr-4 text-right" tip="Total offensive yards (passing + rushing) per game." />
+            <SortHeader label="Def Yds Allowed/G" sortKey="def" sort={sort} setSort={setSort} className="pr-4 text-right" tip="Total yards allowed (passing + rushing) per game." />
+            <SortHeader label="Points For/G" sortKey="pf" sort={sort} setSort={setSort} className="pr-4 text-right" />
+            <SortHeader label="Points Against/G" sortKey="pa" sort={sort} setSort={setSort} className="pr-4 text-right" />
+            <SortHeader label="Turnover Margin" sortKey="margin" sort={sort} setSort={setSort} className="text-right" tip="Takeaways minus giveaways (interceptions only - this game doesn't model fumbles)." />
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((t) => {
+            const team = teamById.get(t.teamId)
+            return (
+              <tr key={t.teamId} className={`border-b ${userRowClass(t.teamId, userTeamId)}`}>
+                <td className="py-1 pr-4 whitespace-nowrap">{team ? `${team.region} ${team.name}` : `Team ${t.teamId}`}</td>
+                <td className="py-1 pr-4 text-right">{t.offYardsPerGame.toFixed(1)}</td>
+                <td className="py-1 pr-4 text-right">{t.defYardsAllowedPerGame.toFixed(1)}</td>
+                <td className="py-1 pr-4 text-right">{t.pointsForPerGame.toFixed(1)}</td>
+                <td className="py-1 pr-4 text-right">{t.pointsAgainstPerGame.toFixed(1)}</td>
+                <td
+                  className={`py-1 text-right font-semibold ${
+                    t.turnoverMargin > 0 ? 'text-emerald-400' : t.turnoverMargin < 0 ? 'text-red-400' : 'text-white'
+                  }`}
+                >
+                  {t.turnoverMargin > 0 ? `+${t.turnoverMargin}` : t.turnoverMargin}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+</div>
+    </div>
+  )
+}
+
 function StatsLeadersView({
   leagueId,
   season,
@@ -3544,9 +3668,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [advancing, setAdvancing] = useState(false)
   const [autoFilling, setAutoFilling] = useState(false)
   const [rosterError, setRosterError] = useState<string | null>(null)
-  const [tab, setTab] = useState<'league' | 'roster' | 'gamereport' | 'trade' | 'freeagents' | 'stats' | 'history'>(
-    'league',
-  )
+  const [tab, setTab] = useState<
+    'league' | 'roster' | 'gamereport' | 'trade' | 'freeagents' | 'teamstats' | 'stats' | 'history'
+  >('league')
   const [showGuide, setShowGuide] = useState(true)
 
   const teamName = (id: number) => {
@@ -3781,6 +3905,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             {league.userTeamId != null && (
               <NavTab icon="🆓" label="Free Agents" active={tab === 'freeagents'} onClick={() => setTab('freeagents')} />
             )}
+            <NavTab icon="📋" label="Team Stats" active={tab === 'teamstats'} onClick={() => setTab('teamstats')} />
             <NavTab icon="📈" label="Stat Leaders" active={tab === 'stats'} onClick={() => setTab('stats')} />
             <NavTab icon="📜" label="History" active={tab === 'history'} onClick={() => setTab('history')} />
           </div>
@@ -3808,6 +3933,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
               showDraftButton={false}
               onProceedToDraft={() => {}}
             />
+          )}
+          {tab === 'teamstats' && (
+            <TeamStatsView leagueId={leagueId} season={league.season} userTeamId={league.userTeamId} />
           )}
           {tab === 'stats' && (
             <StatsLeadersView leagueId={leagueId} season={league.season} userTeamId={league.userTeamId} />
