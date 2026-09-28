@@ -30,13 +30,30 @@ const POSITION_MAX_AAV: Record<Position, number> = {
 const SALARY_FLOOR = 900_000
 
 /**
- * Market-rate salary for a player, based on position, Madden-style overall
- * rating, and age. Talent scales convexly (elite players are paid far more
- * than the gap in overall alone would suggest, same as real football) up to
- * that position's real-world ceiling, and age applies a decline discount on
- * top.
+ * Per-year price adjustment for contract length, same real-world dynamic as
+ * an actual NFL negotiation: a short "prove it"/franchise-tag-style deal
+ * pays a premium per year since the team is taking on no long-term risk,
+ * while a longer deal trades a lower AAV for multi-year security - the
+ * team's savings on a longer deal's per-year cost more than make up for
+ * the extra years guaranteed. Without this, a 1-year and a 4-year deal for
+ * the same player paid the exact same AAV, which is what made the "years"
+ * dropdown on the resign screen feel like it did nothing.
  */
-export function marketSalary(position: Position, overall: number, age: number): number {
+const CONTRACT_LENGTH_FACTOR: Record<number, number> = {
+  1: 1.15,
+  2: 1.0,
+  3: 0.94,
+  4: 0.89,
+}
+
+/**
+ * Market-rate salary for a player, based on position, Madden-style overall
+ * rating, age, and contract length. Talent scales convexly (elite players
+ * are paid far more than the gap in overall alone would suggest, same as
+ * real football) up to that position's real-world ceiling, age applies a
+ * decline discount, and length applies the premium/discount above.
+ */
+export function marketSalary(position: Position, overall: number, age: number, years = 2): number {
   const talent = Math.max(0, overall - MIN_OVERALL) / (99 - MIN_OVERALL)
   const talentFactor = Math.pow(talent, 2.4)
   const ceiling = POSITION_MAX_AAV[position]
@@ -44,6 +61,7 @@ export function marketSalary(position: Position, overall: number, age: number): 
 
   const ageFactor =
     age <= 26 ? 1.05 : age <= 29 ? 1.0 : age <= 32 ? 0.85 : age <= 35 ? 0.65 : 0.45
+  const lengthFactor = CONTRACT_LENGTH_FACTOR[years] ?? 1
 
-  return Math.round(base * ageFactor)
+  return Math.round(base * ageFactor * lengthFactor)
 }

@@ -19,8 +19,8 @@ export function computeCapSpace(roster: Player[]) {
   return SALARY_CAP - committed
 }
 
-function estimateSalary(rng: Rng, position: Position, overall: number, age: number) {
-  return Math.round(marketSalary(position, overall, age) * (0.9 + rng() * 0.25))
+function estimateSalary(rng: Rng, position: Position, overall: number, age: number, years: number) {
+  return Math.round(marketSalary(position, overall, age, years) * (0.9 + rng() * 0.25))
 }
 
 /** How likely a team is to proactively re-sign a player before his contract ever hits the open market. */
@@ -60,17 +60,18 @@ export function expireContractsWithAiRetention(rng: Rng, players: Player[], user
     if (p.teamId === userTeamId) return { ...p, contract: null }
 
     if (rng() < retentionChance(p.ratings.overall)) {
-      const newSalary = estimateSalary(rng, p.position, p.ratings.overall, p.age)
+      // A real re-signed veteran usually gets a multi-year deal, not a
+      // prove-it 1-year prove-it deal - randInt(1,3) here (average ~2
+      // years) meant roughly half the whole non-rookie roster expired
+      // every single season on contract length alone, on top of
+      // retirements, flooding free agency and gutting roster continuity
+      // far beyond real NFL turnover.
+      const newYears = randInt(rng, 2, 4)
+      const newSalary = estimateSalary(rng, p.position, p.ratings.overall, p.age, newYears)
       const committed = committedByTeam.get(p.teamId) ?? 0
       if (committed + newSalary <= SALARY_CAP * 0.95) {
         committedByTeam.set(p.teamId, committed + newSalary)
-        // A real re-signed veteran usually gets a multi-year deal, not a
-        // prove-it 1-year prove-it deal - randInt(1,3) here (average ~2
-        // years) meant roughly half the whole non-rookie roster expired
-        // every single season on contract length alone, on top of
-        // retirements, flooding free agency and gutting roster continuity
-        // far beyond real NFL turnover.
-        return { ...p, contract: { salary: newSalary, yearsLeft: randInt(rng, 2, 4) } }
+        return { ...p, contract: { salary: newSalary, yearsLeft: newYears } }
       }
     }
 
@@ -126,15 +127,20 @@ export function runFreeAgency(
       if (!needs || needs.length === 0) continue
 
       const salaryCap = capRemaining.get(teamId) ?? 0
+      // Same reasoning as the AI retention signing above: a real free
+      // agent deal is rarely just 1 year. Decided once per team-turn (not
+      // re-rolled per candidate) so a team's cap-fit check below matches
+      // the length it actually signs at.
+      const candidateYears = randInt(rng, 2, 4)
       const candidateIndex = pool.findIndex((p) => {
         if (!needs.includes(p.position)) return false
-        const salary = estimateSalary(rng, p.position, p.ratings.overall, p.age)
+        const salary = estimateSalary(rng, p.position, p.ratings.overall, p.age, candidateYears)
         return salary <= salaryCap
       })
       if (candidateIndex === -1) continue
 
       const [player] = pool.splice(candidateIndex, 1)
-      const salary = estimateSalary(rng, player.position, player.ratings.overall, player.age)
+      const salary = estimateSalary(rng, player.position, player.ratings.overall, player.age, candidateYears)
       needs.splice(needs.indexOf(player.position), 1)
       capRemaining.set(teamId, salaryCap - salary)
 
@@ -142,9 +148,7 @@ export function runFreeAgency(
       const signedPlayer = {
         ...player,
         teamId,
-        // Same reasoning as the AI retention signing above: a real free
-        // agent deal is rarely just 1 year.
-        contract: { salary, yearsLeft: randInt(rng, 2, 4) },
+        contract: { salary, yearsLeft: candidateYears },
         depthOrder: nextDepthOrder(teamRoster, player.position),
       }
       teamRoster.push(signedPlayer)

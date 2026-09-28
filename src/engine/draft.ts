@@ -198,7 +198,7 @@ export function prospectToPlayer(prospect: CollegeProspect, teamId: number, dept
   // Rookie deals are well below open-market rate even for a high-overall
   // prospect - draft slot, not proven production, sets rookie pay in real
   // life. Still scales with talent, just heavily discounted.
-  const rookieSalary = Math.round(marketSalary(prospect.position, prospect.ratings.overall, prospect.age) * 0.35)
+  const rookieSalary = Math.round(marketSalary(prospect.position, prospect.ratings.overall, prospect.age, 4) * 0.35)
   return {
     firstName: prospect.firstName,
     lastName: prospect.lastName,

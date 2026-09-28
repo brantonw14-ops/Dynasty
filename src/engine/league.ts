@@ -622,7 +622,7 @@ export async function resignPlayer(leagueId: number, playerId: number, years: nu
 
   const roster = await db.players.where('teamId').equals(league.userTeamId).toArray()
   const capSpace = computeCapSpace(roster.filter((p) => p.id !== playerId))
-  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age))
+  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age, years))
   if (salary > capSpace) throw new Error('Not enough cap space for this contract')
 
   await db.players.update(playerId, { contract: { salary, yearsLeft: years } })
@@ -661,11 +661,11 @@ export async function openFreeAgency(leagueId: number) {
  */
 export function estimateFreeAgentAsk(season: number, player: Player): { salary: number; years: number } {
   const rng = createRng(season * 7919 + player.id)
-  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age) * (0.9 + rng() * 0.25))
   // A real free-agent ask is rarely a 1-year "prove it" deal - matches the
   // multi-year length AI signings use (freeAgency.ts), so the user isn't
   // stuck re-signing far more of the roster every season than the AI does.
   const years = 2 + Math.floor(rng() * 3)
+  const salary = Math.round(marketSalary(player.position, player.ratings.overall, player.age, years) * (0.9 + rng() * 0.25))
   return { salary, years }
 }
 
@@ -699,6 +699,7 @@ export async function signFreeAgent(leagueId: number, playerId: number) {
     contract: { salary, yearsLeft: years },
     depthOrder: nextDepthOrder(roster, player.position),
   })
+  await applyAutoSort(leagueId, league.userTeamId)
 }
 
 /** Moves a player up or down their own team's depth chart at their position. */
@@ -719,6 +720,25 @@ export async function moveDepthChart(teamId: number, playerId: number, direction
     { ...player, depthOrder: other.depthOrder },
     { ...other, depthOrder: player.depthOrder },
   ] as never[])
+}
+
+/** Turns the user's "auto sort roster" setting on or off - see applyAutoSort. */
+export async function setAutoSortRoster(leagueId: number, enabled: boolean) {
+  await db.leagues.update(leagueId, { autoSortRoster: enabled })
+}
+
+/**
+ * Re-applies best-overall-first depth ordering for the user's team, but
+ * only if they've turned "auto sort roster" on - called after every
+ * roster-composition change (sign, cut, draft pick, trade) so the user
+ * doesn't have to remember to click "Best Roster" by hand each time. A
+ * no-op for every other team and for the user when the setting is off.
+ */
+async function applyAutoSort(leagueId: number, teamId: number | null) {
+  if (teamId == null) return
+  const league = await db.leagues.get(leagueId)
+  if (!league || !league.autoSortRoster || league.userTeamId !== teamId) return
+  await optimizeDepthChart(teamId)
 }
 
 /** Resets the whole team's depth chart to best-overall-first at every position - one click instead of reordering by hand. */
@@ -813,7 +833,7 @@ export async function autoFillRoster(leagueId: number): Promise<{ added: number 
 
   const freeAgents = (await db.players.toArray())
     .filter((p) => p.teamId === null)
-    .map((p) => ({ p, salary: Math.round(marketSalary(p.position, p.ratings.overall, p.age) * 0.9) }))
+    .map((p) => ({ p, salary: Math.round(marketSalary(p.position, p.ratings.overall, p.age, 1) * 0.9) }))
     .sort((a, b) => a.salary - b.salary)
 
   const signed: Player[] = []
@@ -826,7 +846,10 @@ export async function autoFillRoster(leagueId: number): Promise<{ added: number 
     capSpace -= salary
   }
 
-  if (signed.length > 0) await db.players.bulkPut(signed as never[])
+  if (signed.length > 0) {
+    await db.players.bulkPut(signed as never[])
+    await applyAutoSort(leagueId, league.userTeamId)
+  }
   return { added: signed.length }
 }
 
@@ -1048,6 +1071,7 @@ export async function makeUserDraftPick(leagueId: number, prospectIndex: number)
   const roster = await db.players.where('teamId').equals(league.userTeamId).toArray()
   const depthOrder = nextDepthOrder(roster, prospect.position)
   await db.players.add(prospectToPlayer(prospect, league.userTeamId, depthOrder) as never)
+  await applyAutoSort(leagueId, league.userTeamId)
 
   picked.add(prospectIndex)
   const log = [...(league.draftLog ?? []), { pickNumber: (league.draftLog?.length ?? 0) + 1, teamId: league.userTeamId, prospectIndex }]
@@ -1250,6 +1274,12 @@ async function executeTradeMechanics(
     ])
     await db.leagues.update(leagueId, { tradedPicks: nextTradedPicks })
   }
+
+  // Only the receiving side's roster gains a genuinely new player whose
+  // depth-chart slot hasn't been decided yet - the giving side just lost
+  // one, nothing to re-sort there.
+  if (getting.length > 0) await applyAutoSort(leagueId, teamAId)
+  if (giving.length > 0) await applyAutoSort(leagueId, teamBId)
 }
 
 /** Flags/unflags one of the user's own players as available in trade talks - AI teams periodically shop offers for blocked players. */

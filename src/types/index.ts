@@ -226,6 +226,13 @@ export interface League {
   // Cleared once that season's draft finishes, so it never carries a stale
   // class's favorites into next year's.
   favoriteProspectIndices?: number[]
+  // When on, the user's own team's depth chart is automatically reset to
+  // best-overall-first every time a player joins or leaves their roster
+  // (sign, cut, draft pick, trade) - see applyAutoSort in league.ts. Off by
+  // default so a user who's deliberately built a non-obvious depth chart
+  // (e.g. a run-first backup ahead of a pass-catching specialist) doesn't
+  // have it silently overwritten.
+  autoSortRoster?: boolean
   // Only picks that have actually changed hands are stored - a pick with
   // no entry here still belongs to its original team.
   tradedPicks?: TradedPick[]

@@ -18,6 +18,7 @@ import {
   makeUserDraftPick,
   moveDepthChart,
   optimizeDepthChart,
+  setAutoSortRoster,
   openFreeAgency,
   ownedPicks,
   previewLeagueTeams,
@@ -674,10 +675,12 @@ function RosterView({
     () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
     [leagueId, season],
   )
+  const league = useLiveQuery(() => db.leagues.get(leagueId), [leagueId])
   const [moving, setMoving] = useState<number | null>(null)
   const [optimizing, setOptimizing] = useState(false)
   const [cuttingId, setCuttingId] = useState<number | null>(null)
   const [cutError, setCutError] = useState<string | null>(null)
+  const [togglingAutoSort, setTogglingAutoSort] = useState(false)
 
   if (!team || !roster || !stats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
@@ -710,6 +713,15 @@ function RosterView({
       await optimizeDepthChart(teamId)
     } finally {
       setOptimizing(false)
+    }
+  }
+
+  const handleToggleAutoSort = async () => {
+    setTogglingAutoSort(true)
+    try {
+      await setAutoSortRoster(leagueId, !(league?.autoSortRoster ?? false))
+    } finally {
+      setTogglingAutoSort(false)
     }
   }
 
@@ -757,14 +769,25 @@ function RosterView({
           )}
         </div>
         {editable && (
-          <button
-            onClick={handleOptimize}
-            disabled={optimizing}
-            className="px-3 py-1.5 border rounded-md text-xs whitespace-nowrap disabled:opacity-50 self-start sm:self-auto"
-            title="Sets every position's depth chart to best overall first"
-          >
-            {optimizing ? 'Optimizing...' : 'Best Roster'}
-          </button>
+          <div className="flex items-center gap-3 self-start sm:self-auto">
+            <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer whitespace-nowrap" title="Automatically re-sorts your depth chart to best-overall-first every time a player joins or leaves your roster (sign, cut, draft, trade) - no need to click Best Roster yourself.">
+              <input
+                type="checkbox"
+                checked={league?.autoSortRoster ?? false}
+                disabled={togglingAutoSort}
+                onChange={handleToggleAutoSort}
+              />
+              Auto Sort Roster
+            </label>
+            <button
+              onClick={handleOptimize}
+              disabled={optimizing}
+              className="px-3 py-1.5 border rounded-md text-xs whitespace-nowrap disabled:opacity-50"
+              title="Sets every position's depth chart to best overall first"
+            >
+              {optimizing ? 'Optimizing...' : 'Best Roster'}
+            </button>
+          </div>
         )}
       </div>
       <TeamPositionPanel roster={roster} leagueId={leagueId} needs={rosterNeeds(roster)} />
@@ -3005,7 +3028,7 @@ function ResignView({
       if (key === 'grade') return grades.get(p.id) ?? ''
       if (key === 'salary') return p.contract?.salary ?? -1
       if (key === 'yrs') return p.contract?.yearsLeft ?? -1
-      if (key === 'asking') return marketSalary(p.position, p.ratings.overall, p.age)
+      if (key === 'asking') return marketSalary(p.position, p.ratings.overall, p.age, yearsFor(p.id))
       return p.ratings.overall
     },
     (p) => p.ratings.overall,
@@ -3058,11 +3081,12 @@ function ResignView({
             <SortHeader label="Salary" sortKey="salary" sort={sort} setSort={setSort} className="pl-4 pr-2 text-right" />
             <SortHeader label="Yrs Left" sortKey="yrs" sort={sort} setSort={setSort} className="px-2 text-right" />
             <SortHeader
-              label="Resign/Ext Price"
+              label="Resign/Ext $/yr"
               sortKey="asking"
               sort={sort}
               setSort={setSort}
               className="pl-4 pr-2 text-right"
+              tip="Estimated pay per year at the contract length picked in the dropdown - a shorter deal costs more per year, a longer one costs a bit less per year (but more in total)."
             />
             <th className="py-1 pl-4"></th>
           </tr>
@@ -3070,7 +3094,7 @@ function ResignView({
         <tbody>
           {sorted.map((p) => {
             const grade = grades.get(p.id)
-            const estSalary = marketSalary(p.position, p.ratings.overall, p.age)
+            const estSalary = marketSalary(p.position, p.ratings.overall, p.age, yearsFor(p.id))
             return (
               <tr key={p.id} className="border-b">
                 <td className="py-1 pr-6 whitespace-nowrap">
