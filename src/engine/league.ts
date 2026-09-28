@@ -1023,6 +1023,17 @@ export async function simRestOfDraft(leagueId: number) {
   await advanceDraft(leagueId, { stopBeforeUserTurn: false })
 }
 
+/**
+ * A healthy floor for the free agent pool right at kickoff - below this,
+ * a team that's short of the 53-man minimum (whether from a thin preseason
+ * pool getting picked over by 32 teams' free agency + draft, or just bad
+ * luck) could get stuck: simWeek refuses to kick off under 53, and the only
+ * other source of new free agents (the small weekly street-FA trickle in
+ * simWeek itself) only runs *after* a week is successfully simmed - a
+ * chicken-and-egg lock with no way out from inside the game.
+ */
+const MIN_FREE_AGENT_POOL_AT_KICKOFF = 80
+
 async function finalizeDraft(leagueId: number) {
   const league = await db.leagues.get(leagueId)
   if (!league) return
@@ -1030,6 +1041,11 @@ async function finalizeDraft(leagueId: number) {
   const teams = await db.teams.toArray()
   const rng = createRng(league.season * 7919 + 4)
   const regularSeasonWeeks = await generateAndStoreSchedule(leagueId, teams, league.season, rng)
+
+  const freeAgentCount = await db.players.filter((p) => p.teamId === null).count()
+  if (freeAgentCount < MIN_FREE_AGENT_POOL_AT_KICKOFF) {
+    await db.players.bulkAdd(generateStreetFreeAgents(rng, MIN_FREE_AGENT_POOL_AT_KICKOFF - freeAgentCount) as never[])
+  }
 
   await db.leagues.update(leagueId, {
     week: 1,

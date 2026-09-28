@@ -322,7 +322,13 @@ export function buildCoachReport(myStats: PlayerGameStats[], oppStats: PlayerGam
 
   const keys: CoachReportKey[] = []
 
-  const qbLine = myStats.find((s) => s.position === 'QB' && s.passAttempts > 0)
+  // The starter, not just whichever QB row happens to come first in the
+  // array - a mop-up/backup series with a few garbage-time attempts could
+  // otherwise get graded instead of the QB who actually played the game,
+  // producing a report that flatly contradicts the real box score.
+  const qbLine = myStats
+    .filter((s) => s.position === 'QB' && s.passAttempts > 0)
+    .sort((a, b) => b.passAttempts - a.passAttempts)[0]
   if (qbLine) {
     const rating = passerRating(qbLine.passAttempts, qbLine.passCompletions, qbLine.passYards, qbLine.passTDs, qbLine.interceptions)
     keys.push({
@@ -499,7 +505,12 @@ export function buildGameRecap(
     paragraphs.push(`${teamName} came up just short against ${oppTeamName}, ${myScore}-${oppScore}.`)
   }
 
-  const qb = players.find((p) => p.position === 'QB' && p.stat.passAttempts >= 5)
+  // Same fix as buildCoachReport above - the QB with the most attempts,
+  // not just the first qualifying row, so a backup's mop-up series can't
+  // get picked over the starter's actual game.
+  const qb = players
+    .filter((p) => p.position === 'QB' && p.stat.passAttempts >= 5)
+    .sort((a, b) => b.stat.passAttempts - a.stat.passAttempts)[0]
   if (qb) {
     const rating = passerRating(
       qb.stat.passAttempts,

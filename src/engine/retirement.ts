@@ -19,7 +19,7 @@ import type { Rng } from './rng'
  * under contract). The practical value of surfacing this is knowing to get
  * final value via a trade, not "saving" them by extending.
  */
-export function retirementChance(position: Player['position'], age: number) {
+export function retirementChance(position: Player['position'], age: number, overall?: number) {
   const { averageRetirement, maxAge } = POSITION_AGE_PROFILE[position]
   if (age >= maxAge) return 1
   if (age < averageRetirement - 8) return 0
@@ -28,7 +28,18 @@ export function retirementChance(position: Player['position'], age: number) {
   // retirement age lands on `averageRetirement`, not just its median -
   // a logistic curve's 50/50 point alone isn't enough since this is a
   // sequential year-by-year survival process, not a one-shot draw.
-  return 1 / (1 + Math.exp(-(age - averageRetirement) * 1.3))
+  const baseChance = 1 / (1 + Math.exp(-(age - averageRetirement) * 1.3))
+
+  // A player still playing at a genuinely high level has real incentive
+  // (and real NFL precedent - Brady, Rice, Vinatieri, Adams...) to keep
+  // going past the point an average player at his position would hang it
+  // up. Never near-guarantees retirement even at elite overall - once the
+  // hard maxAge cutoff above is reached it's still final - but meaningfully
+  // extends a star's effective career instead of every player at a
+  // position sharing one age curve regardless of how well they still play.
+  if (overall == null) return baseChance
+  const qualityFactor = overall >= 88 ? 0.25 : overall >= 82 ? 0.45 : overall >= 75 ? 0.7 : 1
+  return baseChance * qualityFactor
 }
 
 export function ageAndRetire(rng: Rng, players: Player[]): { retiredIds: number[]; agedPlayers: Player[] } {
@@ -37,7 +48,7 @@ export function ageAndRetire(rng: Rng, players: Player[]): { retiredIds: number[
 
   for (const p of players) {
     const nextAge = p.age + 1
-    if (rng() < retirementChance(p.position, nextAge)) {
+    if (rng() < retirementChance(p.position, nextAge, p.ratings.overall)) {
       retiredIds.push(p.id)
     } else {
       agedPlayers.push({ ...p, age: nextAge, experience: (p.experience ?? 0) + 1 })

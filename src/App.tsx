@@ -399,13 +399,13 @@ function overallColor(n: number) {
  * Flags a player who's a real chance to retire at the *next* offseason
  * transition (age+1, matching ageAndRetire's own nextAge) - lets the user
  * see it coming instead of a player just vanishing. Note this doesn't mean
- * extending them prevents it: retirement here is purely age/position-driven
+ * extending them prevents it: retirement here is age/position/overall-driven
  * and never looks at contract status, same as real life (a player can
  * retire under contract) - the actual value is knowing to get final trade
  * value out of them before they're gone for nothing.
  */
-function retirementRiskBadge(p: { position: Position; age: number }): { label: string; className: string } | null {
-  const chance = retirementChance(p.position, p.age + 1)
+function retirementRiskBadge(p: { position: Position; age: number; ratings: { overall: number } }): { label: string; className: string } | null {
+  const chance = retirementChance(p.position, p.age + 1, p.ratings.overall)
   if (chance >= 0.6) return { label: `${Math.round(chance * 100)}% retirement risk`, className: 'bg-red-900 text-red-200' }
   if (chance >= 0.3) return { label: `${Math.round(chance * 100)}% retirement risk`, className: 'bg-amber-900 text-amber-200' }
   return null
