@@ -92,10 +92,17 @@ export function runFreeAgency(
   freeAgents: Player[],
   signingOrderTeamIds: number[],
   excludeTeamIds: Set<number> = new Set(),
+  capReserve = 0,
 ): FreeAgentSigning[] {
   const pool = [...freeAgents].sort((a, b) => b.ratings.overall - a.ratings.overall)
+  // capReserve holds back cap room for known future obligations this pass
+  // doesn't otherwise account for (namely: the draft class about to land on
+  // every roster right after this signing period, with real cap hits of its
+  // own) - without it, AI teams routinely spent every last dollar on free
+  // agents and then had nothing left when their rookies arrived, putting
+  // most of the league over the cap before the season even started.
   const capRemaining = new Map(
-    teams.map((t) => [t.id, computeCapSpace(rostersByTeam.get(t.id) ?? [])]),
+    teams.map((t) => [t.id, computeCapSpace(rostersByTeam.get(t.id) ?? []) - capReserve]),
   )
   const needsByTeam = new Map(
     teams.map((t) => [t.id, rosterNeeds(rostersByTeam.get(t.id) ?? [])]),

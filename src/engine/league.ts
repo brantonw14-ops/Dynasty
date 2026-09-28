@@ -698,6 +698,16 @@ export async function optimizeDepthChart(teamId: number) {
 /** A real NFL draft is exactly 7 rounds; every team gets one pick each round unless it's been traded away. */
 export const DRAFT_ROUNDS = 7
 
+/**
+ * Rough worst-case cap cost of signing a full 7-round rookie class (a top
+ * pick can land north of $14M on their below-market rookie deal). Reserved
+ * out of AI teams' free-agency budget just before the draft so a team that
+ * spends every last dollar in free agency doesn't start the season over
+ * the cap the moment its rookies land - a real team always plans free
+ * agency around its incoming draft class, it never happens by accident.
+ */
+const DRAFT_CLASS_CAP_RESERVE = 22_000_000
+
 /** Who currently owns a given future draft pick - the original team, unless it's been traded (see League.tradedPicks). */
 export function pickOwner(tradedPicks: TradedPick[] | undefined, year: number, round: number, originalTeamId: number): number {
   const entry = tradedPicks?.find((p) => p.year === year && p.round === round && p.originalTeamId === originalTeamId)
@@ -796,7 +806,12 @@ export async function beginDraft(leagueId: number) {
   }
   const freeAgents = allPlayers.filter((p) => p.teamId === null)
   const excludeTeamIds = new Set(league.userTeamId != null ? [league.userTeamId] : [])
-  const signings = runFreeAgency(rng, teams, rostersByTeam, freeAgents, draftOrderTeamIds, excludeTeamIds)
+  // Every team is about to add a full 7-round draft class with real cap
+  // hits of its own, right after this signing period - reserve room for it
+  // so AI teams don't spend their entire cap on free agents and then have
+  // nothing left once their rookies land (this was the actual cause of
+  // most of the league starting the season over the cap).
+  const signings = runFreeAgency(rng, teams, rostersByTeam, freeAgents, draftOrderTeamIds, excludeTeamIds, DRAFT_CLASS_CAP_RESERVE)
   // runFreeAgency already pushes each signed player into rostersByTeam as it
   // signs them (so later signings in the same pass see accurate cap/needs),
   // so only the DB write is left to do here.
