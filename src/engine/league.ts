@@ -1047,6 +1047,33 @@ async function finalizeDraft(leagueId: number) {
     await db.players.bulkAdd(generateStreetFreeAgents(rng, MIN_FREE_AGENT_POOL_AT_KICKOFF - freeAgentCount) as never[])
   }
 
+  // AI teams never re-sort their own depth chart (that's a user-only manual
+  // action - "Best Roster"), so a rookie who's now clearly better than an
+  // aging starter, or a free agent signed mid-offseason, just sits at the
+  // bottom of the chart forever since new arrivals are always appended
+  // there. Over a season or two that leaves a plainly worse player starting
+  // every single week with no correction - re-sort every AI team to
+  // best-overall-first right before kickoff, same as the user's own button
+  // does, so a team's actual talent decides who starts.
+  if (league.userTeamId != null) {
+    const aiRosters = await db.players.filter((p) => p.teamId !== null && p.teamId !== league.userTeamId).toArray()
+    const byTeamPosition = new Map<string, Player[]>()
+    for (const p of aiRosters) {
+      const key = `${p.teamId}:${p.position}`
+      const list = byTeamPosition.get(key) ?? []
+      list.push(p)
+      byTeamPosition.set(key, list)
+    }
+    const depthUpdates: Player[] = []
+    for (const group of byTeamPosition.values()) {
+      const sorted = [...group].sort((a, b) => b.ratings.overall - a.ratings.overall)
+      sorted.forEach((p, i) => {
+        if (p.depthOrder !== i) depthUpdates.push({ ...p, depthOrder: i })
+      })
+    }
+    if (depthUpdates.length > 0) await db.players.bulkPut(depthUpdates as never[])
+  }
+
   await db.leagues.update(leagueId, {
     week: 1,
     regularSeasonWeeks,
