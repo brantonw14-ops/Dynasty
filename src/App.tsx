@@ -14,6 +14,7 @@ import {
   findSuggestedTrades,
   getDraftBoard,
   getSeasonHistory,
+  getUpcomingDraftClassPreview,
   makeUserDraftPick,
   moveDepthChart,
   optimizeDepthChart,
@@ -26,6 +27,7 @@ import {
   signFreeAgent,
   simRestOfDraft,
   simWeek,
+  toggleFavoriteProspect,
   toggleTradeBlock,
   type SuggestedTrade,
   type TeamPreview,
@@ -40,9 +42,11 @@ import {
   isStarterInRoster,
   MIN_ROSTER_SIZE,
   POSITION_ATTRIBUTES,
+  projectDepthChartRole,
   ROSTER_SHAPE,
   rosterNeeds,
   STARTER_COUNTS,
+  type DepthChartProjection,
 } from './engine/players'
 import { passerRating } from './engine/gameSim'
 import { marketSalary } from './engine/salary'
@@ -409,6 +413,12 @@ function retirementRiskBadge(p: { position: Position; age: number; ratings: { ov
   if (chance >= 0.6) return { label: `${Math.round(chance * 100)}% retirement risk`, className: 'bg-red-900 text-red-200' }
   if (chance >= 0.3) return { label: `${Math.round(chance * 100)}% retirement risk`, className: 'bg-amber-900 text-amber-200' }
   return null
+}
+
+const DEPTH_PROJECTION_LABELS: Record<DepthChartProjection, { label: string; className: string }> = {
+  'day1-starter': { label: 'Day 1 Starter', className: 'bg-emerald-900 text-emerald-200' },
+  'next-man-up': { label: 'Next Man Up', className: 'bg-amber-900 text-amber-200' },
+  'bottom-of-chart': { label: 'Bottom of Chart', className: 'bg-slate-700 text-slate-300' },
 }
 
 /** A position's 3 attribute ratings always keep the same color by slot (1st/2nd/3rd), so e.g. Speed reads as the same color everywhere it appears, not colored by how good this particular player's number happens to be. */
@@ -2944,12 +2954,23 @@ function FreeAgencyView({
     () => db.players.filter((p) => p.teamId === null).toArray(),
     [leagueId],
   )
+  // Only meaningful during the offseason 'freeagency' window (showDraftButton
+  // is true only for that instance, not the in-season "Free Agents" tab
+  // reuse) - getUpcomingDraftClassPreview itself returns null outside that
+  // phase, so this is harmless to always run.
+  const draftClassPreview = useLiveQuery(() => getUpcomingDraftClassPreview(leagueId), [leagueId])
+  const league = useLiveQuery(() => db.leagues.get(leagueId), [leagueId])
   const [signingId, setSigningId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [advancing, setAdvancing] = useState(false)
   const [autoFilling, setAutoFilling] = useState(false)
   const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
   const [positionFilter, setPositionFilter] = useState<Position | null>(null)
+  const [subTab, setSubTab] = useState<'agents' | 'draftclass'>('agents')
+  const [draftClassSort, setDraftClassSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
+  const [draftClassPositionFilter, setDraftClassPositionFilter] = useState<Position | null>(null)
+  const [draftFavoritesOnly, setDraftFavoritesOnly] = useState(false)
+  const [favoritingIndex, setFavoritingIndex] = useState<number | null>(null)
 
   if (!roster || !freeAgents) return <p className="text-sm text-gray-500">Loading free agents...</p>
 
@@ -2975,6 +2996,34 @@ function FreeAgencyView({
     },
     (p) => p.ratings.overall,
   )
+
+  const favorites = new Set(league?.favoriteProspectIndices ?? [])
+  const draftClassAvailable = draftClassPreview ?? []
+  const draftClassFiltered = (
+    draftClassPositionFilter ? draftClassAvailable.filter((p) => p.position === draftClassPositionFilter) : draftClassAvailable
+  ).filter((p) => !draftFavoritesOnly || favorites.has(p.index))
+  const sortedDraftClass = sortRows(
+    draftClassFiltered,
+    draftClassSort,
+    (p, key) => {
+      if (key === 'name') return `${p.firstName} ${p.lastName}`
+      if (key === 'pos') return POSITION_ORDER.indexOf(p.position)
+      if (key === 'age') return p.age
+      if (key === 'college') return p.college
+      if (key === 'pot') return p.ratings.potential
+      return p.ratings.overall
+    },
+    (p) => p.ratings.overall,
+  )
+
+  const handleToggleFavorite = async (prospectIndex: number) => {
+    setFavoritingIndex(prospectIndex)
+    try {
+      await toggleFavoriteProspect(leagueId, prospectIndex)
+    } finally {
+      setFavoritingIndex(null)
+    }
+  }
 
   const handleSign = async (playerId: number) => {
     setError(null)
@@ -3071,17 +3120,40 @@ function FreeAgencyView({
       )}
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
 
-      <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} onSelectPosition={setPositionFilter} />
-      {positionFilter && (
-        <p className="text-xs text-blue-300 mb-2">
-          Showing {positionFilter} only -{' '}
-          <button className="underline" onClick={() => setPositionFilter(null)}>
-            clear filter
+      {showDraftButton && (
+        <div className="flex gap-4 border-b mb-4">
+          <button
+            onClick={() => setSubTab('agents')}
+            className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+              subTab === 'agents' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+            }`}
+          >
+            Free Agents
           </button>
-        </p>
+          <button
+            onClick={() => setSubTab('draftclass')}
+            className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+              subTab === 'draftclass' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+            }`}
+          >
+            Upcoming Draft Class {favorites.size > 0 && `(★ ${favorites.size})`}
+          </button>
+        </div>
       )}
 
-      <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+      {subTab === 'agents' ? (
+        <>
+          <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} onSelectPosition={setPositionFilter} />
+          {positionFilter && (
+            <p className="text-xs text-blue-300 mb-2">
+              Showing {positionFilter} only -{' '}
+              <button className="underline" onClick={() => setPositionFilter(null)}>
+                clear filter
+              </button>
+            </p>
+          )}
+
+          <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
 <table className="w-full min-w-[560px] text-sm border-collapse data-table">
         <thead>
           <tr className="text-left text-gray-400 border-b">
@@ -3133,6 +3205,112 @@ function FreeAgencyView({
         </tbody>
       </table>
 </div>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-gray-500 mb-3">
+            The exact class that will be on the board come draft day - star the prospects you want to target so
+            they're easy to find once picks are actually happening.
+          </p>
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={draftFavoritesOnly}
+                onChange={(e) => setDraftFavoritesOnly(e.target.checked)}
+              />
+              Favorites only ({favorites.size})
+            </label>
+            {draftClassPositionFilter && (
+              <p className="text-xs text-blue-300">
+                Showing {draftClassPositionFilter} only -{' '}
+                <button className="underline" onClick={() => setDraftClassPositionFilter(null)}>
+                  clear filter
+                </button>
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {POSITION_ORDER.map((pos) => (
+              <button
+                key={pos}
+                onClick={() => setDraftClassPositionFilter(draftClassPositionFilter === pos ? null : pos)}
+                className={`px-2 py-1 rounded border text-xs ${
+                  draftClassPositionFilter === pos ? 'border-blue-500 bg-blue-900/50 text-blue-200' : 'border-slate-700 text-gray-400'
+                }`}
+              >
+                {pos}
+              </button>
+            ))}
+          </div>
+
+          <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+<table className="w-full min-w-[640px] text-sm border-collapse data-table">
+        <thead>
+          <tr className="text-left text-gray-400 border-b">
+            <th className="py-1 pr-2"></th>
+            <SortHeader label="Name" sortKey="name" sort={draftClassSort} setSort={setDraftClassSort} />
+            <SortHeader label="Pos" sortKey="pos" sort={draftClassSort} setSort={setDraftClassSort} />
+            <SortHeader label="Age" sortKey="age" sort={draftClassSort} setSort={setDraftClassSort} className="text-right" />
+            <SortHeader label="OVR" sortKey="overall" sort={draftClassSort} setSort={setDraftClassSort} className="text-right" tip={OVR_TIP} />
+            <SortHeader label="POT" sortKey="pot" sort={draftClassSort} setSort={setDraftClassSort} className="text-right" tip={POT_TIP} />
+            <SortHeader label="College" sortKey="college" sort={draftClassSort} setSort={setDraftClassSort} />
+            <th className="py-1">
+              <InfoTip label="Depth" tip="Where this prospect would actually land on your current depth chart if drafted." />
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {sortedDraftClass.map((p) => {
+            const projection = DEPTH_PROJECTION_LABELS[projectDepthChartRole(p.position, p.ratings.overall, roster)]
+            const isFavorite = favorites.has(p.index)
+            return (
+              <tr key={p.index} className="border-b">
+                <td className="py-1 pr-2">
+                  <button
+                    onClick={() => handleToggleFavorite(p.index)}
+                    disabled={favoritingIndex === p.index}
+                    className={isFavorite ? 'text-yellow-400' : 'text-gray-600'}
+                    title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                  >
+                    {isFavorite ? '★' : '☆'}
+                  </button>
+                </td>
+                <td className="py-1 whitespace-nowrap">
+                  {p.firstName} {p.lastName}
+                </td>
+                <td className="py-1">{p.position}</td>
+                <td className="py-1 text-right">{p.age}</td>
+                <td className={`py-1 text-right ${overallColor(p.ratings.overall)} font-semibold`}>{p.ratings.overall}</td>
+                <td className="py-1 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
+                <td className="py-1 whitespace-nowrap">
+                  {p.college}
+                  <div className="text-[10px] text-gray-500">{COLLEGE_TIER_LABELS[p.collegeTier]}</div>
+                </td>
+                <td className="py-1">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${projection.className}`}>{projection.label}</span>
+                </td>
+              </tr>
+            )
+          })}
+          {sortedDraftClass.length === 0 && (
+            <tr>
+              <td colSpan={8} className="text-sm text-gray-500 py-2">
+                {draftClassPreview === undefined
+                  ? 'Loading draft class...'
+                  : draftFavoritesOnly
+                    ? 'No favorited prospects yet - star some from the list above.'
+                    : draftClassPositionFilter
+                      ? `No ${draftClassPositionFilter} prospects in next year's class.`
+                      : 'No draft class to preview right now.'}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+</div>
+        </>
+      )}
     </div>
   )
 }
@@ -3154,20 +3332,33 @@ function DraftView({
   teamName: (id: number) => string
 }) {
   const board = useLiveQuery(() => getDraftBoard(leagueId), [leagueId])
+  const league = useLiveQuery(() => db.leagues.get(leagueId), [leagueId])
   const userRoster = useLiveQuery(
     (): Promise<Player[]> =>
       userTeamId != null ? db.players.where('teamId').equals(userTeamId).toArray() : Promise.resolve([]),
     [userTeamId],
   )
   const [pickingIndex, setPickingIndex] = useState<number | null>(null)
+  const [favoritingIndex, setFavoritingIndex] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
   const [positionFilter, setPositionFilter] = useState<Position | null>(null)
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [subTab, setSubTab] = useState<'board' | 'mypicks'>('board')
   const [simming, setSimming] = useState(false)
 
-  if (board === undefined || !userRoster) return <p className="text-sm text-gray-500">Loading draft board...</p>
+  if (board === undefined || !userRoster || league === undefined) return <p className="text-sm text-gray-500">Loading draft board...</p>
   if (board === null) return <p className="text-sm text-gray-500">No draft in progress.</p>
+
+  const favorites = new Set(league?.favoriteProspectIndices ?? [])
+  const handleToggleFavorite = async (prospectIndex: number) => {
+    setFavoritingIndex(prospectIndex)
+    try {
+      await toggleFavoriteProspect(leagueId, prospectIndex)
+    } finally {
+      setFavoritingIndex(null)
+    }
+  }
 
   const userNeeds = new Set(rosterNeeds(userRoster))
   const capSpace = computeCapSpace(userRoster)
@@ -3177,7 +3368,8 @@ function DraftView({
   const estimateRookieSalary = (p: { position: Position; ratings: { overall: number }; age: number }) =>
     Math.round(marketSalary(p.position, p.ratings.overall, p.age) * 0.35)
   const available = board.prospects.filter((p) => !board.pickedIndices.has(p.index))
-  const filtered = positionFilter ? available.filter((p) => p.position === positionFilter) : available
+  const positionMatched = positionFilter ? available.filter((p) => p.position === positionFilter) : available
+  const filtered = favoritesOnly ? positionMatched.filter((p) => favorites.has(p.index)) : positionMatched
   const sorted = sortRows(
     filtered,
     sort,
@@ -3297,6 +3489,11 @@ function DraftView({
           </button>
         </p>
       )}
+
+      <label className="flex items-center gap-1.5 text-xs text-gray-400 mb-2 cursor-pointer w-fit">
+        <input type="checkbox" checked={favoritesOnly} onChange={(e) => setFavoritesOnly(e.target.checked)} />
+        Favorites only ({favorites.size})
+      </label>
 
       {userTeamId != null && (
         <div className="flex gap-4 border-b mb-4">
@@ -3422,10 +3619,20 @@ function DraftView({
               const needed = userNeeds.has(p.position)
               const rookieSalary = estimateRookieSalary(p)
               const tooExpensive = userTeamId != null && rookieSalary > capSpace
+              const projection = DEPTH_PROJECTION_LABELS[projectDepthChartRole(p.position, p.ratings.overall, userRoster)]
+              const isFavorite = favorites.has(p.index)
               return (
                 <div key={p.index} className="border border-slate-800 rounded-md p-2 text-xs">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex items-center gap-1">
+                      <button
+                        onClick={() => handleToggleFavorite(p.index)}
+                        disabled={favoritingIndex === p.index}
+                        className={`shrink-0 ${isFavorite ? 'text-yellow-400' : 'text-gray-600'}`}
+                        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                      >
+                        {isFavorite ? '★' : '☆'}
+                      </button>
                       <span className="font-medium">
                         {p.firstName} {p.lastName}
                       </span>{' '}
@@ -3441,6 +3648,9 @@ function DraftView({
                     >
                       {pickingIndex === p.index ? '...' : 'Draft'}
                     </button>
+                  </div>
+                  <div className="mt-1">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded ${projection.className}`}>{projection.label}</span>
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-gray-300">
                     <span>Age {p.age}</span>
@@ -3469,6 +3679,7 @@ function DraftView({
 <table className="w-full min-w-[560px] text-sm border-collapse data-table">
           <thead>
             <tr className="text-left text-gray-400 border-b">
+              <th className="py-1 pr-2"></th>
               <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} className="pr-4" />
               <SortHeader label="Pos" sortKey="pos" sort={sort} setSort={setSort} className="pr-4" />
               <SortHeader label="Age" sortKey="age" sort={sort} setSort={setSort} className="pr-4 text-right" />
@@ -3480,6 +3691,9 @@ function DraftView({
               <SortHeader label="College" sortKey="college" sort={sort} setSort={setSort} className="pr-4" />
               <th className="py-1 pr-4">College Stats</th>
               <th className="py-1 pr-4">Scouting Report</th>
+              <th className="py-1 pr-4">
+                <InfoTip label="Depth" tip="Where this prospect would actually land on your current depth chart if drafted." />
+              </th>
               <th className="py-1"></th>
             </tr>
           </thead>
@@ -3488,8 +3702,20 @@ function DraftView({
               const needed = userNeeds.has(p.position)
               const rookieSalary = estimateRookieSalary(p)
               const tooExpensive = userTeamId != null && rookieSalary > capSpace
+              const projection = DEPTH_PROJECTION_LABELS[projectDepthChartRole(p.position, p.ratings.overall, userRoster)]
+              const isFavorite = favorites.has(p.index)
               return (
                 <tr key={p.index} className="border-b align-top">
+                  <td className="py-1 pr-2">
+                    <button
+                      onClick={() => handleToggleFavorite(p.index)}
+                      disabled={favoritingIndex === p.index}
+                      className={isFavorite ? 'text-yellow-400' : 'text-gray-600'}
+                      title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                    >
+                      {isFavorite ? '★' : '☆'}
+                    </button>
+                  </td>
                   <td className="py-1 pr-4 whitespace-nowrap">
                     {p.firstName} {p.lastName}
                   </td>
@@ -3514,6 +3740,9 @@ function DraftView({
                   </td>
                   <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{p.collegeStatLine}</td>
                   <td className="py-1 pr-4 text-gray-500 max-w-xs">{p.scoutingNote}</td>
+                  <td className="py-1 pr-4 whitespace-nowrap">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${projection.className}`}>{projection.label}</span>
+                  </td>
                   <td className="py-1 text-right">
                     <button
                       onClick={() => handlePick(p.index)}
@@ -3528,7 +3757,7 @@ function DraftView({
             })}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={10} className="text-sm text-gray-500 py-2">
+                <td colSpan={12} className="text-sm text-gray-500 py-2">
                   {positionFilter ? `No ${positionFilter} prospects left on the board.` : 'No prospects left on the board.'}
                 </td>
               </tr>

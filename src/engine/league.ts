@@ -917,6 +917,38 @@ export async function getDraftBoard(leagueId: number): Promise<DraftBoardState |
 }
 
 /**
+ * The upcoming draft class, browsable during the free agency window before
+ * the draft actually starts - deterministic from the same season number and
+ * team count beginDraft will use to generate the real class later, so this
+ * preview is exactly the class that shows up on draft day (same prospects,
+ * same `index` values), not just a rough approximation. Only meaningful
+ * during the 'freeagency' phase (the window between resign and draft); null
+ * otherwise since there's no "next" class to preview at any other point.
+ */
+export async function getUpcomingDraftClassPreview(leagueId: number): Promise<CollegeProspect[] | null> {
+  const league = await db.leagues.get(leagueId)
+  if (!league || league.phase !== 'freeagency') return null
+
+  const teams = await db.teams.toArray()
+  const totalPicks = teams.length * DRAFT_ROUNDS
+  const draftSeed = league.season * 7919 + 3
+  const draftPositions = generateDraftClassPositions(league.season * 7919 + 5, totalPicks)
+  return generateDraftClass(draftSeed, draftPositions)
+}
+
+/** Stars/unstars a prospect (by their stable `index`) for later reference on draft day - see League.favoriteProspectIndices. */
+export async function toggleFavoriteProspect(leagueId: number, prospectIndex: number) {
+  const league = await db.leagues.get(leagueId)
+  if (!league) throw new Error('League not found')
+
+  const current = new Set(league.favoriteProspectIndices ?? [])
+  if (current.has(prospectIndex)) current.delete(prospectIndex)
+  else current.add(prospectIndex)
+
+  await db.leagues.update(leagueId, { favoriteProspectIndices: [...current] })
+}
+
+/**
  * Picks the best prospect still on the board for a team: prefers a position
  * they actually still need (real roster shape, not just "have zero"), and
  * only falls back to best-player-available once every remaining need is
@@ -1084,6 +1116,7 @@ async function finalizeDraft(leagueId: number) {
     draftOrderIndex: undefined,
     draftPickedIndices: undefined,
     draftLog: undefined,
+    favoriteProspectIndices: undefined,
   })
 }
 

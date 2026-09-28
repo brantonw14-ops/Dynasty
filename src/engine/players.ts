@@ -295,6 +295,31 @@ export function isStarterInRoster(player: { id: number; position: Position; dept
   return rank >= 0 && rank < starterCount
 }
 
+export type DepthChartProjection = 'day1-starter' | 'next-man-up' | 'bottom-of-chart'
+
+/**
+ * Projects where a prospect would actually land on the user's current depth
+ * chart if drafted - by overall rank against the existing group at that
+ * position, same "starters vs. bench" cutoff (STARTER_COUNTS) the roster
+ * screen itself uses. Meant to make a draft pick's real impact obvious at a
+ * glance instead of having to mentally compare OVR numbers against a roster
+ * you're not looking at: "day1-starter" would immediately crack the
+ * starting lineup, "next-man-up" would be the first player off the bench at
+ * that spot, "bottom-of-chart" wouldn't touch the field unless injuries hit.
+ */
+export function projectDepthChartRole(
+  position: Position,
+  prospectOverall: number,
+  roster: { position: Position; ratings: { overall: number } }[],
+): DepthChartProjection {
+  const group = roster.filter((p) => p.position === position)
+  const starterCount = STARTER_COUNTS[position] ?? 1
+  const betterCount = group.filter((p) => p.ratings.overall > prospectOverall).length
+  if (betterCount < starterCount) return 'day1-starter'
+  if (betterCount < starterCount + 2) return 'next-man-up'
+  return 'bottom-of-chart'
+}
+
 function avgOverall(players: { ratings: { overall: number } }[]): number {
   return players.length > 0 ? players.reduce((sum, p) => sum + p.ratings.overall, 0) / players.length : 0
 }

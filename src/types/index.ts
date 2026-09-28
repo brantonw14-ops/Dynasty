@@ -219,6 +219,13 @@ export interface League {
   draftOrderIndex?: number
   draftPickedIndices?: number[]
   draftLog?: DraftPickLogEntry[]
+  // Prospect `index` values the user has starred - set from the "upcoming
+  // draft class" preview during free agency and still readable once the
+  // draft actually starts, since both use the exact same deterministic
+  // seed/positions for a given season (see getUpcomingDraftClassPreview).
+  // Cleared once that season's draft finishes, so it never carries a stale
+  // class's favorites into next year's.
+  favoriteProspectIndices?: number[]
   // Only picks that have actually changed hands are stored - a pick with
   // no entry here still belongs to its original team.
   tradedPicks?: TradedPick[]
