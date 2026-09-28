@@ -2552,6 +2552,7 @@ function ResignView({
     (p) => p.ratings.overall,
   )
   const needsDecisionCount = roster.filter((p) => p.contract === null).length
+  const needs = rosterNeeds(roster)
 
   return (
     <div>
@@ -2576,6 +2577,8 @@ function ResignView({
       </div>
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+
+      <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} />
 
       <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
 <table className="text-sm border-collapse data-table">
