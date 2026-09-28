@@ -1963,7 +1963,10 @@ function TradeView({
               const key = `${s.otherTeamId}-${s.giveIds.join(',')}-${s.getIds.join(',')}-${s.givePicks.map(pickRefKey).join(',')}`
               const giveSalary = s.give.reduce((sum, p) => sum + p.salary, 0)
               const getSalary = s.get.reduce((sum, p) => sum + p.salary, 0)
-              const netSalary = getSalary - giveSalary
+              // Positive = you shed more salary than you take on, so your
+              // cap space goes UP - that's a good thing, shown green with a
+              // "+". Negative = your cap space goes down - red with a "-".
+              const capSpaceChange = giveSalary - getSalary
               const overallChange = computeOverallChange(myRoster, s.giveIds, s.get)
               const involvedPositions = new Set<Position>([...s.give.map((p) => p.position), ...s.get.map((p) => p.position)])
               return (
@@ -2016,9 +2019,9 @@ function TradeView({
                     </div>
                   </div>
                   <p className="text-sm text-gray-200 font-medium mt-2">
-                    Net cap impact:{' '}
-                    <span className={`font-bold ${netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-300'}`}>
-                      {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
+                    Cap Space:{' '}
+                    <span className={`font-bold ${capSpaceChange > 0 ? 'text-emerald-400' : capSpaceChange < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                      {capSpaceChange === 0 ? 'no change' : `${capSpaceChange > 0 ? '+' : '-'}${formatMoney(Math.abs(capSpaceChange))}/yr`}
                     </span>
                   </p>
                   <OverallChangeSummary change={overallChange} involvedPositions={involvedPositions} />
@@ -2190,8 +2193,10 @@ function TradeOfferRow({
   })
   const offerSalary = offerPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
   const requestSalary = requestPlayers.reduce((sum, p) => sum + (p.contract?.salary ?? 0), 0)
-  // Positive = you'd be taking on more salary than you shed (cap space goes down).
-  const netSalary = offerSalary - requestSalary
+  // Positive = you shed more salary than you take on, so your cap space
+  // goes UP - shown green with a "+". Negative = cap space goes down - red
+  // with a "-".
+  const capSpaceChange = requestSalary - offerSalary
   const overallChange = computeOverallChange(
     userRoster,
     requestPlayers.map((p) => p.id),
@@ -2249,9 +2254,9 @@ function TradeOfferRow({
         </div>
       </div>
       <p className="text-sm text-gray-200 font-medium mt-2">
-        Net cap impact:{' '}
-        <span className={`font-bold ${netSalary > 0 ? 'text-red-400' : netSalary < 0 ? 'text-emerald-400' : 'text-gray-300'}`}>
-          {netSalary === 0 ? 'even' : `${netSalary > 0 ? '+' : '-'}${formatMoney(Math.abs(netSalary))}/yr`}
+        Cap Space:{' '}
+        <span className={`font-bold ${capSpaceChange > 0 ? 'text-emerald-400' : capSpaceChange < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+          {capSpaceChange === 0 ? 'no change' : `${capSpaceChange > 0 ? '+' : '-'}${formatMoney(Math.abs(capSpaceChange))}/yr`}
         </span>
       </p>
       <OverallChangeSummary change={overallChange} involvedPositions={involvedPositions} />

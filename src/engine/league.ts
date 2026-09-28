@@ -1176,14 +1176,28 @@ export async function generateTradeOffers(leagueId: number) {
   if ((target.contract?.salary ?? 0) > capSpace) return // can't actually afford the contract
 
   // Sometimes the AI wants a second, lesser piece off the user's roster too
-  // (a throw-in at a position it's actually short on) rather than every
-  // offer being strictly one-for-something - real trades aren't always
-  // 1-for-1 either.
+  // (a throw-in at a position it's actually short on, or just a clear
+  // upgrade there) rather than every offer being strictly one-for-something
+  // - real trades aren't always 1-for-1 either. Searches the user's whole
+  // roster, not just candidatePool - candidatePool is the trade-block list,
+  // which is usually just the one player the user explicitly blocked, so
+  // there was rarely anyone left in it to find as a second piece. This also
+  // used to require `needs.has(p.position)` alone, which (like the primary
+  // target's own need check above) almost never fires on a healthy 53-man
+  // roster - a second candidate needs the same "would this actually
+  // upgrade them" fallback the primary target gets, or it practically
+  // never gets added.
   const requestTargets = [target]
-  if (rng() < 0.4) {
-    const secondCandidate = candidatePool.find(
-      (p) => p.id !== target.id && !alreadyOffered.has(p.id) && needs.has(p.position) && (p.contract?.salary ?? 0) <= capSpace,
-    )
+  if (rng() < 0.55) {
+    const secondCandidate = myRoster.find((p) => {
+      if (p.id === target.id || alreadyOffered.has(p.id)) return false
+      if ((p.contract?.salary ?? 0) > capSpace) return false
+      if (needs.has(p.position)) return true
+      const currentBest = fromRoster
+        .filter((x) => x.position === p.position)
+        .sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+      return !currentBest || p.ratings.overall > currentBest.ratings.overall + 3
+    })
     if (secondCandidate) requestTargets.push(secondCandidate)
   }
   const requestValue = requestTargets.reduce((sum, p) => sum + playerValue(p), 0)
@@ -1382,27 +1396,41 @@ function findAcceptablePackage(
   myRoster: Player[],
   picksAvailable: TradePickRef[],
   season: number,
+  preferPairs = false,
 ): { give: Player[]; picks: TradePickRef[] } | null {
-  // Singles: try every surplus player, cheapest-value first, so a modest
-  // depth piece is preferred whenever it's actually enough on its own -
-  // no cap here, a roster is small enough that this is cheap.
-  for (const g of giveCandidates) {
-    const result = tryGivePackage(theirRoster, getSet, [g], myRoster, picksAvailable, season)
-    if (result) return result
-  }
-
-  // Pairs: a single surplus piece alone often isn't enough for a real
-  // upgrade target, so this is where most matches actually get found -
-  // capped to a generous pool (not just the very cheapest) so a
-  // high-value target still has a shot at a package that reaches it.
-  const pool = giveCandidates.slice(0, 25)
-  for (let i = 0; i < pool.length; i++) {
-    for (let j = i + 1; j < pool.length; j++) {
-      const result = tryGivePackage(theirRoster, getSet, [pool[i], pool[j]], myRoster, picksAvailable, season)
+  const trySingles = () => {
+    // Try every surplus player, cheapest-value first, so a modest depth
+    // piece is preferred whenever it's actually enough on its own - no cap
+    // here, a roster is small enough that this is cheap.
+    for (const g of giveCandidates) {
+      const result = tryGivePackage(theirRoster, getSet, [g], myRoster, picksAvailable, season)
       if (result) return result
     }
+    return null
   }
-  return null
+
+  const tryPairs = () => {
+    // A single surplus piece alone often isn't enough for a real upgrade
+    // target, so this is where most matches actually get found - capped to
+    // a generous pool (not just the very cheapest) so a high-value target
+    // still has a shot at a package that reaches it.
+    const pool = giveCandidates.slice(0, 25)
+    for (let i = 0; i < pool.length; i++) {
+      for (let j = i + 1; j < pool.length; j++) {
+        const result = tryGivePackage(theirRoster, getSet, [pool[i], pool[j]], myRoster, picksAvailable, season)
+        if (result) return result
+      }
+    }
+    return null
+  }
+
+  // Singles always winning whenever one happens to suffice made real
+  // multi-player packages rare - a single depth piece is "acceptable" far
+  // more often than it's the most realistic offer. Most of the time, try
+  // bundling a real package first and only fall back to a single piece if
+  // no pair works at all.
+  if (preferPairs) return tryPairs() ?? trySingles()
+  return trySingles() ?? tryPairs()
 }
 
 /**
@@ -1506,8 +1534,14 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
         .sort((a, b) => playerValue(a) - playerValue(b))
       const picksAvailable = allMyPicks.filter((r) => !usedPickKeys.has(pickKey(r)))
 
+      // Bias toward real multi-player packages most of the time - a single
+      // depth piece "working" (being enough by value) doesn't mean it's the
+      // most realistic offer, and always preferring singles made the whole
+      // suggestion list read as one-for-one trades far more than a real
+      // league's trade mix.
+      const preferPairs = rng() < 0.65
       let getSet = [theirs]
-      let result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season)
+      let result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season, preferPairs)
 
       let bundledSecond: Player | null = null
       if (!result) {
@@ -1524,7 +1558,7 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
           ) ?? null
         if (bundledSecond) {
           getSet = [theirs, bundledSecond]
-          result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season)
+          result = findAcceptablePackage(theirRoster, getSet, mySurplus, myRoster, picksAvailable, league.season, preferPairs)
         }
       }
 
