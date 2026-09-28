@@ -97,3 +97,61 @@ export function computeConferenceSeeds(
     divisionWinner: winnerIds.has(row.teamId),
   }))
 }
+
+export interface ClinchStatus {
+  clinchedPlayoffs: boolean
+  clinchedBye: boolean
+  eliminated: boolean
+}
+
+/**
+ * Mathematical clinch/elimination check for one team, based only on the
+ * current conference standings and how many regular-season games remain -
+ * no simulation, no guessing at other teams' schedules. A team has clinched
+ * a playoff spot once its worst-case final record (losing out) still beats
+ * every currently-out team's best-case final record (winning out) by
+ * enough that not enough of them can pass it for the final wild-card spot.
+ * A bye is the same check against 2nd place instead of 8th. Elimination is
+ * the mirror image: even winning out isn't enough to catch the current
+ * cutoff team's current pace.
+ */
+export function computeClinchStatus(
+  teams: Team[],
+  regularGames: GameResult[],
+  regularSeasonWeeks: number,
+  teamId: number,
+): ClinchStatus | null {
+  const team = teams.find((t) => t.id === teamId)
+  if (!team) return null
+
+  const seeds = computeConferenceSeeds(teams, regularGames, team.conference)
+  const mySeed = seeds.find((s) => s.teamId === teamId)
+  if (!mySeed) return null
+
+  // computeConferenceSeeds only returns the seeded top 7 - the "who could
+  // still catch me" comparison needs every other team in the conference,
+  // otherwise there's nothing to compare against and a team looks clinched
+  // the moment it's in the top 7, even in week 1.
+  const confTeams = teams.filter((t) => t.conference === team.conference)
+  const allConfStandings = computeStandings(confTeams, regularGames)
+  const seededIds = new Set(seeds.map((s) => s.teamId))
+  const outStandings = allConfStandings.filter((r) => !seededIds.has(r.teamId))
+
+  const gamesPlayed = (id: number) => regularGames.filter((g) => g.homeTeamId === id || g.awayTeamId === id).length
+  const remaining = (id: number) => Math.max(0, regularSeasonWeeks - gamesPlayed(id))
+  const bestCaseWins = (s: StandingsRow) => s.wins + remaining(s.teamId)
+  const worstCaseWins = (s: StandingsRow) => s.wins
+
+  const inField = seeds.slice(0, 7)
+  const outField = outStandings
+  const myWorstCase = worstCaseWins(mySeed)
+  const myBestCase = bestCaseWins(mySeed)
+
+  const clinchedPlayoffs = mySeed.seed <= 7 && outField.every((s) => myWorstCase > bestCaseWins(s))
+  const clinchedBye =
+    mySeed.seed === 1 && [...seeds.slice(1), ...outField].every((s) => myWorstCase > bestCaseWins(s))
+  const cutoffTeam = inField[6]
+  const eliminated = mySeed.seed > 7 && cutoffTeam != null && myBestCase < worstCaseWins(cutoffTeam)
+
+  return { clinchedPlayoffs, clinchedBye, eliminated }
+}

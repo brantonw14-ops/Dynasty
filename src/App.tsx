@@ -51,7 +51,7 @@ import {
 import { passerRating } from './engine/gameSim'
 import { marketSalary } from './engine/salary'
 import { gradeSeasonPerformance, type SeasonGrade } from './engine/seasonPerformance'
-import { computeConferenceSeeds, computeStandings } from './engine/standings'
+import { computeClinchStatus, computeConferenceSeeds, computeStandings } from './engine/standings'
 import { pickValue } from './engine/trades'
 import type {
   Conference,
@@ -2399,6 +2399,7 @@ function TeamStatsView({ leagueId, season, userTeamId }: { leagueId: number; sea
   )
   const teams = useLiveQuery(() => db.teams.toArray(), [])
   const [sort, setSort] = useState<SortState>({ key: 'pf', dir: 'desc' })
+  const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null)
 
   if (!games || !stats || !teams) return <p className="text-sm text-gray-500">Loading team stats...</p>
 
@@ -2481,8 +2482,16 @@ function TeamStatsView({ leagueId, season, userTeamId }: { leagueId: number; sea
           {sorted.map((t) => {
             const team = teamById.get(t.teamId)
             return (
-              <tr key={t.teamId} className={`border-b ${userRowClass(t.teamId, userTeamId)}`}>
-                <td className="py-1 pr-4 whitespace-nowrap">{team ? `${team.region} ${team.name}` : `Team ${t.teamId}`}</td>
+              <tr
+                key={t.teamId}
+                className={`border-b cursor-pointer ${
+                  selectedTeamId === t.teamId ? 'bg-blue-900/40 ring-1 ring-inset ring-blue-500' : ''
+                } ${userRowClass(t.teamId, userTeamId)}`}
+                onClick={() => setSelectedTeamId(selectedTeamId === t.teamId ? null : t.teamId)}
+              >
+                <td className="py-1 pr-4 whitespace-nowrap underline decoration-dotted">
+                  {team ? `${team.region} ${team.name}` : `Team ${t.teamId}`}
+                </td>
                 <td className="py-1 pr-4 text-right">{t.offYardsPerGame.toFixed(1)}</td>
                 <td className="py-1 pr-4 text-right">{t.defYardsAllowedPerGame.toFixed(1)}</td>
                 <td className="py-1 pr-4 text-right">{t.pointsForPerGame.toFixed(1)}</td>
@@ -2500,6 +2509,20 @@ function TeamStatsView({ leagueId, season, userTeamId }: { leagueId: number; sea
         </tbody>
       </table>
 </div>
+
+      {selectedTeamId != null && (
+        <div className="mt-6 border-t border-slate-800 pt-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-200">
+              {teamById.get(selectedTeamId)?.region} {teamById.get(selectedTeamId)?.name} Roster
+            </h3>
+            <button onClick={() => setSelectedTeamId(null)} className="text-xs text-gray-500 underline">
+              close
+            </button>
+          </div>
+          <RosterView teamId={selectedTeamId} leagueId={leagueId} season={season} editable={false} />
+        </div>
+      )}
     </div>
   )
 }
@@ -2513,14 +2536,23 @@ function StatsLeadersView({
   season: number
   userTeamId: number | null
 }) {
-  const stats = useLiveQuery(
+  const allStats = useLiveQuery(
     () => db.playerGameStats.where('[leagueId+season]').equals([leagueId, season]).toArray(),
+    [leagueId, season],
+  )
+  const games = useLiveQuery(
+    () => db.games.where('leagueId').equals(leagueId).and((g) => g.season === season).toArray(),
     [leagueId, season],
   )
   const players = useLiveQuery(() => db.players.toArray(), [])
   const teams = useLiveQuery(() => db.teams.toArray(), [])
+  const [scope, setScope] = useState<'regular' | 'playoffs'>('regular')
 
-  if (!stats || !players || !teams) return <p className="text-sm text-gray-500">Loading stats...</p>
+  if (!allStats || !games || !players || !teams) return <p className="text-sm text-gray-500">Loading stats...</p>
+
+  const playoffGameIds = new Set(games.filter((g) => g.round !== undefined).map((g) => g.id))
+  const hasPlayoffStats = allStats.some((s) => playoffGameIds.has(s.gameId))
+  const stats = allStats.filter((s) => (scope === 'playoffs' ? playoffGameIds.has(s.gameId) : !playoffGameIds.has(s.gameId)))
 
   const playerById = new Map(players.map((p) => [p.id, p]))
   const teamById = new Map(teams.map((t) => [t.id, t]))
@@ -2603,6 +2635,27 @@ function StatsLeadersView({
   }
 
   return (
+    <div>
+      {hasPlayoffStats && (
+        <div className="flex gap-4 border-b mb-4">
+          <button
+            onClick={() => setScope('regular')}
+            className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+              scope === 'regular' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+            }`}
+          >
+            Regular Season
+          </button>
+          <button
+            onClick={() => setScope('playoffs')}
+            className={`px-1 py-2 text-sm border-b-2 -mb-px ${
+              scope === 'playoffs' ? 'border-blue-600 font-medium' : 'border-transparent text-gray-500'
+            }`}
+          >
+            Playoffs
+          </button>
+        </div>
+      )}
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
       {categories.map((cat) => (
         <div key={cat.title}>
@@ -2629,6 +2682,7 @@ function StatsLeadersView({
           )}
         </div>
       ))}
+    </div>
     </div>
   )
 }
@@ -3872,6 +3926,49 @@ function StandingsTable({
   )
 }
 
+type PlayoffSeedRow = ReturnType<typeof computeConferenceSeeds>[number]
+
+/** One bracket matchup box: shows a final score once played, "seed X vs seed Y" once both sides are known but not yet played, or a TBD placeholder for a still-undetermined slot. */
+function MatchupBox({
+  high,
+  low,
+  game,
+  teamName,
+  userTeamId,
+}: {
+  high: PlayoffSeedRow | null
+  low: PlayoffSeedRow | null
+  game: GameResult | undefined
+  teamName: (id: number) => string
+  userTeamId: number | null
+}) {
+  const involvesUser = (high?.teamId === userTeamId || low?.teamId === userTeamId) && userTeamId != null
+  const winnerIdOf = (g: GameResult) => (g.homeScore >= g.awayScore ? g.homeTeamId : g.awayTeamId)
+  const sideLabel = (seed: PlayoffSeedRow | null, score: number | null, won: boolean | null) => {
+    if (!seed) return <div className="text-gray-600 italic">TBD</div>
+    return (
+      <div className={`flex items-center justify-between gap-2 ${won === false ? 'opacity-50' : ''}`}>
+        <span className={`truncate ${seed.teamId === userTeamId ? 'text-blue-300 font-semibold' : ''} ${won ? 'font-semibold text-white' : ''}`}>
+          <span className="text-cyan-400 mr-1">{seed.seed}</span>
+          {teamName(seed.teamId)}
+        </span>
+        {score != null && <span className={won ? 'text-emerald-400 font-semibold' : 'text-gray-500'}>{score}</span>}
+      </div>
+    )
+  }
+  const highWon = game ? winnerIdOf(game) === high?.teamId : null
+  return (
+    <div
+      className={`border rounded-md px-2 py-1.5 text-xs space-y-1 ${
+        involvesUser ? 'border-blue-500 bg-blue-950/30' : 'border-slate-800'
+      }`}
+    >
+      {sideLabel(high, game ? (high?.teamId === game.homeTeamId ? game.homeScore : game.awayScore) : null, game ? highWon : null)}
+      {sideLabel(low, game ? (low?.teamId === game.homeTeamId ? game.homeScore : game.awayScore) : null, game ? !highWon : null)}
+    </div>
+  )
+}
+
 function PlayoffPictureView({
   teams,
   regularGames,
@@ -3892,17 +3989,60 @@ function PlayoffPictureView({
     NFC: computeConferenceSeeds(teams, regularGames, 'NFC'),
   }
 
-  const gameRow = (g: GameResult) => (
-    <li key={g.id} className={`text-sm border-b py-1 px-1 rounded ${userRowClass(g.homeTeamId, userTeamId) || userRowClass(g.awayTeamId, userTeamId)}`}>
-      <span className={g.awayTeamId === userTeamId ? 'font-semibold' : ''}>
-        {teamName(g.awayTeamId)} {g.awayScore}
-      </span>
-      {' @ '}
-      <span className={g.homeTeamId === userTeamId ? 'font-semibold' : ''}>
-        {teamName(g.homeTeamId)} {g.homeScore}
-      </span>
-    </li>
-  )
+  /** Best-remaining-seed-vs-worst-remaining-seed - same reseeding rule simPlayoffRound itself uses for the divisional round. */
+  const bestVsWorst = (remaining: PlayoffSeedRow[]): [PlayoffSeedRow, PlayoffSeedRow][] => {
+    const sorted = [...remaining].sort((a, b) => a.seed - b.seed)
+    const pairs: [PlayoffSeedRow, PlayoffSeedRow][] = []
+    for (let i = 0; i < sorted.length / 2; i++) pairs.push([sorted[i], sorted[sorted.length - 1 - i]])
+    return pairs
+  }
+  const winnerIdOf = (g: GameResult) => (g.homeScore >= g.awayScore ? g.homeTeamId : g.awayTeamId)
+  const seedOf = (conf: Conference, teamId: number) => seedsByConf[conf].find((s) => s.teamId === teamId)
+
+  const wildcardGames = playoffGamesByRound.get('wildcard') ?? []
+  const divisionalGames = playoffGamesByRound.get('divisional') ?? []
+  const conferenceGames = playoffGamesByRound.get('conference') ?? []
+  const superbowlGame = (playoffGamesByRound.get('superbowl') ?? [])[0]
+
+  const gameFor = (games: GameResult[], teamAId: number, teamBId: number) =>
+    games.find(
+      (g) =>
+        (g.homeTeamId === teamAId && g.awayTeamId === teamBId) || (g.homeTeamId === teamBId && g.awayTeamId === teamAId),
+    )
+
+  const bracketForConference = (conf: Conference) => {
+    const seeds = seedsByConf[conf]
+    const [bye, s2, s3, s4, s5, s6, s7] = seeds
+    const wcMatchups: [PlayoffSeedRow, PlayoffSeedRow][] = [
+      [s2, s7],
+      [s3, s6],
+      [s4, s5],
+    ]
+    const wcGames = wcMatchups.map(([h, l]) => gameFor(wildcardGames, h.teamId, l.teamId))
+    const wcAllPlayed = wcGames.every((g) => g != null)
+    const wcWinners = wcAllPlayed ? wcGames.map((g) => seedOf(conf, winnerIdOf(g!))!) : []
+
+    const divRemaining = wcAllPlayed ? [bye, ...wcWinners] : null
+    const divMatchups: ([PlayoffSeedRow, PlayoffSeedRow] | null)[] = divRemaining ? bestVsWorst(divRemaining) : [null, null]
+    const divGames = divMatchups.map((m) => (m ? gameFor(divisionalGames, m[0].teamId, m[1].teamId) : undefined))
+    const divAllPlayed = divMatchups.every((m) => m != null) && divGames.every((g) => g != null)
+    const divWinners = divAllPlayed ? divGames.map((g) => seedOf(conf, winnerIdOf(g!))!) : []
+
+    const confMatchup: [PlayoffSeedRow, PlayoffSeedRow] | null = divAllPlayed
+      ? ([...divWinners].sort((a, b) => a.seed - b.seed) as [PlayoffSeedRow, PlayoffSeedRow])
+      : null
+    const confGame = confMatchup ? gameFor(conferenceGames, confMatchup[0].teamId, confMatchup[1].teamId) : undefined
+    const champ = confGame ? seedOf(conf, winnerIdOf(confGame)) : null
+
+    return { bye, wcMatchups, wcGames, divMatchups, divGames, confMatchup, confGame, champ }
+  }
+
+  const brackets: Record<Conference, ReturnType<typeof bracketForConference>> = {
+    AFC: bracketForConference('AFC'),
+    NFC: bracketForConference('NFC'),
+  }
+  const afcChamp = brackets.AFC.champ
+  const nfcChamp = brackets.NFC.champ
 
   return (
     <div>
@@ -3938,16 +4078,41 @@ function PlayoffPictureView({
         ))}
       </div>
 
-      {ROUND_ORDER.map((round) => {
-        const games = playoffGamesByRound.get(round) ?? []
-        if (games.length === 0) return null
-        return (
-          <div key={round} className="mb-4">
-            <h3 className="text-xs font-semibold text-gray-500 mb-1">{ROUND_LABELS[round]}</h3>
-            <ul className="space-y-1">{games.map(gameRow)}</ul>
-          </div>
-        )
-      })}
+      <h3 className="text-sm font-semibold text-gray-200 mb-3">Bracket</h3>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-6">
+        {CONFERENCES.map((conf) => {
+          const b = brackets[conf]
+          return (
+            <div key={conf}>
+              <h4 className="text-xs font-semibold text-blue-400 mb-2">{conf}</h4>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="space-y-2">
+                  <div className="text-[10px] text-gray-500 uppercase">Wild Card</div>
+                  {b.wcMatchups.map(([h, l], i) => (
+                    <MatchupBox key={i} high={h} low={l} game={b.wcGames[i]} teamName={teamName} userTeamId={userTeamId} />
+                  ))}
+                  <div className="text-[10px] text-gray-500 mt-2">Bye: #{b.bye.seed} {teamName(b.bye.teamId)}</div>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-[10px] text-gray-500 uppercase">Divisional</div>
+                  {b.divMatchups.map((m, i) => (
+                    <MatchupBox key={i} high={m?.[0] ?? null} low={m?.[1] ?? null} game={b.divGames[i]} teamName={teamName} userTeamId={userTeamId} />
+                  ))}
+                </div>
+                <div className="space-y-2">
+                  <div className="text-[10px] text-gray-500 uppercase">{conf} Championship</div>
+                  <MatchupBox high={b.confMatchup?.[0] ?? null} low={b.confMatchup?.[1] ?? null} game={b.confGame} teamName={teamName} userTeamId={userTeamId} />
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <h4 className="text-xs font-semibold text-amber-400 mt-6 mb-2">Super Bowl</h4>
+      <div className="max-w-xs">
+        <MatchupBox high={afcChamp ?? null} low={nfcChamp ?? null} game={superbowlGame} teamName={teamName} userTeamId={userTeamId} />
+      </div>
     </div>
   )
 }
@@ -4055,6 +4220,20 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const nextPlayoffRound =
     ROUND_ORDER.find((r) => (playoffGamesByRound.get(r)?.length ?? 0) === 0) ?? null
 
+  const userTeam = league.userTeamId != null ? teams.find((t) => t.id === league.userTeamId) : undefined
+  const overallRecord = userTeam ? computeStandings(teams, regularGames).find((r) => r.teamId === userTeam.id) : undefined
+  const divisionTeams = userTeam ? teams.filter((t) => t.conference === userTeam.conference && t.division === userTeam.division) : []
+  const divisionGames = regularGames.filter(
+    (g) => divisionTeams.some((t) => t.id === g.homeTeamId) && divisionTeams.some((t) => t.id === g.awayTeamId),
+  )
+  const divisionRecord = userTeam ? computeStandings(divisionTeams, divisionGames).find((r) => r.teamId === userTeam.id) : undefined
+  const recordText = (r: { wins: number; losses: number; ties: number }) =>
+    r.ties > 0 ? `${r.wins}-${r.losses}-${r.ties}` : `${r.wins}-${r.losses}`
+  const clinchStatus =
+    league.phase === 'regular' && league.userTeamId != null
+      ? computeClinchStatus(teams, regularGames, league.regularSeasonWeeks, league.userTeamId)
+      : null
+
   return (
     <div className="max-w-7xl mx-auto p-4 sm:p-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
@@ -4074,6 +4253,15 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
                       ? 'Draft'
                       : 'Complete'}
             {league.userTeamId != null && <> &middot; Your team: {teamName(league.userTeamId)}</>}
+            {overallRecord && (overallRecord.wins > 0 || overallRecord.losses > 0 || overallRecord.ties > 0) && (
+              <>
+                {' '}
+                &middot; <span className="text-white font-semibold">{recordText(overallRecord)}</span>
+                {divisionRecord && (
+                  <span className="text-gray-500"> ({recordText(divisionRecord)} div)</span>
+                )}
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -4158,6 +4346,21 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
       {rosterError && (
         <div className="mb-6 border border-red-700 rounded-md px-4 py-3 bg-red-900/20 text-red-300 text-sm">
           {rosterError}
+        </div>
+      )}
+      {clinchStatus?.clinchedBye && (
+        <div className="mb-6 border border-amber-600 rounded-md px-4 py-3 bg-amber-900/20 text-amber-200 text-sm font-medium">
+          🏆 Clinched the #1 seed and a first-round bye!
+        </div>
+      )}
+      {!clinchStatus?.clinchedBye && clinchStatus?.clinchedPlayoffs && (
+        <div className="mb-6 border border-emerald-700 rounded-md px-4 py-3 bg-emerald-900/20 text-emerald-300 text-sm font-medium">
+          🎉 Clinched a playoff spot!
+        </div>
+      )}
+      {clinchStatus?.eliminated && (
+        <div className="mb-6 border border-slate-700 rounded-md px-4 py-3 bg-slate-800/40 text-gray-300 text-sm">
+          Eliminated from playoff contention this season.
         </div>
       )}
 
