@@ -2707,16 +2707,18 @@ function ResignView({
   const [resigningId, setResigningId] = useState<number | null>(null)
   const [yearsByPlayer, setYearsByPlayer] = useState<Map<number, number>>(new Map())
   const [error, setError] = useState<string | null>(null)
+  // Per-row so a failed Extend/Resign shows its reason right next to the
+  // button that was clicked, not just in a page-level banner that's easy to
+  // miss above a long roster table - a click that silently does nothing
+  // reads as "the button doesn't work" even though it's really a cap-space
+  // rejection the user never saw.
+  const [rowErrors, setRowErrors] = useState<Map<number, string>>(new Map())
   const [opening, setOpening] = useState(false)
   const [sort, setSort] = useState<SortState>({ key: 'overall', dir: 'desc' })
 
   if (!roster || !leagueStats) return <p className="text-sm text-gray-500">Loading roster...</p>
 
-  const statTotals = new Map<number, number>()
-  for (const s of leagueStats) {
-    const total = s.passYards + s.rushYards + s.recYards + (s.passTDs + s.rushTDs + s.recTDs) * 20
-    statTotals.set(s.playerId, (statTotals.get(s.playerId) ?? 0) + total)
-  }
+  const statTotals = buildSeasonStatTotals(leagueStats)
   const grades = gradeSeasonPerformance(leagueStats)
 
   const capSpace = computeCapSpace(roster)
@@ -2736,11 +2738,17 @@ function ResignView({
 
   const handleResign = async (playerId: number) => {
     setError(null)
+    setRowErrors((prev) => {
+      const next = new Map(prev)
+      next.delete(playerId)
+      return next
+    })
     setResigningId(playerId)
     try {
       await resignPlayer(leagueId, playerId, yearsFor(playerId))
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setRowErrors((prev) => new Map(prev).set(playerId, message))
     } finally {
       setResigningId(null)
     }
@@ -2816,7 +2824,7 @@ function ResignView({
             <SortHeader label="OVR" sortKey="overall" sort={sort} setSort={setSort} className="px-2 text-right" tip={OVR_TIP} />
             <SortHeader label="POT" sortKey="pot" sort={sort} setSort={setSort} className="px-2 text-right" tip={POT_TIP} />
             <SortHeader label="Grade" sortKey="grade" sort={sort} setSort={setSort} className="px-2 text-right" />
-            <th className="py-1 pl-6 text-left">Last Season</th>
+            <th className="py-1 pl-6 text-left">Last Season Stats</th>
             <SortHeader label="Salary" sortKey="salary" sort={sort} setSort={setSort} className="pl-4 pr-2 text-right" />
             <SortHeader label="Yrs Left" sortKey="yrs" sort={sort} setSort={setSort} className="px-2 text-right" />
             <SortHeader
@@ -2858,8 +2866,8 @@ function ResignView({
                 <td className={`py-1 px-2 text-right font-semibold ${grade ? GRADE_COLORS[grade] : 'text-gray-500'}`}>
                   {grade ?? '-'}
                 </td>
-                <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
-                  {statTotals.has(p.id) ? statTotals.get(p.id) : '-'}
+                <td className="py-1 pl-6 text-left text-gray-400 whitespace-nowrap">
+                  {seasonStatLine(p.position, statTotals.get(p.id))}
                 </td>
                 <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
                   {p.contract ? formatMoney(p.contract.salary) : '-'}
@@ -2901,6 +2909,9 @@ function ResignView({
                       {cuttingId === p.id ? '...' : 'Cut'}
                     </button>
                   </div>
+                  {rowErrors.has(p.id) && (
+                    <div className="text-[11px] text-red-400 text-right mt-1">{rowErrors.get(p.id)}</div>
+                  )}
                 </td>
               </tr>
             )
