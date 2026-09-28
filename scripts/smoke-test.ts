@@ -729,6 +729,15 @@ async function main() {
       if (s.giveIds.length === 0 || s.getIds.length === 0) throw new Error('Refreshed suggestion has an empty side')
     }
     console.log(`OK: findSuggestedTrades with a different seed returns ${refreshed.length} well-formed candidate(s)`)
+
+    // Executing several suggested trades can (by design) leave the user a
+    // few players light - a real trade isn't always an even swap. Real
+    // gameplay would prompt the user to top back up via free agency or
+    // Auto-Fill Roster before kickoff, same as after the draft.
+    const rosterAfterTrades = await db.players.where('teamId').equals((await db.leagues.get(leagueId))!.userTeamId!).toArray()
+    if (rosterAfterTrades.length < MIN_ROSTER_SIZE) {
+      await autoFillRoster(leagueId)
+    }
   })()
 
   await playSeason(leagueId)

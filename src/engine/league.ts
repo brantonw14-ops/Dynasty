@@ -1403,25 +1403,41 @@ function buildBigPackage(
   theirCandidates: Player[],
   usedTheirIds: Set<number>,
   primaryTarget: Player,
-  wouldUpgradeMe: (p: Player) => boolean,
   mySurplus: Player[],
   myRoster: Player[],
   picksAvailable: TradePickRef[],
   season: number,
   totalSize: number,
+  projectedRosterDelta: number,
 ): { give: Player[]; picks: TradePickRef[]; get: Player[] } | null {
-  const getCount = Math.max(1, Math.min(4, Math.round(totalSize * 0.4)))
+  // Split roughly evenly between their side and ours - a real trade rarely
+  // nets one team a big net gain or loss in bodies, and skewing this (an
+  // earlier version gave 60% of the headcount to "give") meant almost
+  // every suggestion shrank the user's roster, which on an already-full
+  // 53-man roster tripped the roster-size safety check below and killed
+  // nearly all suggestions.
+  const getCount = Math.max(1, Math.min(4, Math.round(totalSize * 0.35)))
+  const giveCount = Math.max(1, totalSize - getCount)
   const getSet = [primaryTarget]
+  // Extra "get" slots beyond the primary target are throw-ins, not more
+  // stars - each additional real upgrade piled onto getSet multiplies the
+  // fairness ratio the AI demands back (evaluateTrade scales it off the
+  // single best overall changing hands), so a getSet of several genuine
+  // upgrades became nearly impossible for bench depth to match in value.
+  // Prefer filler here: not needed by them, and no better than the primary
+  // target so the required ratio doesn't keep climbing.
   for (const candidate of theirCandidates) {
     if (getSet.length >= getCount) break
     if (candidate.id === primaryTarget.id || usedTheirIds.has(candidate.id)) continue
     if (theirNeeds.has(candidate.position)) continue
-    if (!wouldUpgradeMe(candidate)) continue
+    if (candidate.ratings.overall > primaryTarget.ratings.overall) continue
     getSet.push(candidate)
   }
-
-  const giveCount = Math.max(1, totalSize - getSet.length)
-  const give: Player[] = mySurplus.slice(0, giveCount)
+  // If we came up short on their side (not enough qualifying candidates),
+  // shrink what we give too - a short getSet inflating giveCount was the
+  // actual cause of every suggestion tripping the roster-size guard below.
+  const actualGiveCount = Math.max(1, giveCount - (getCount - getSet.length))
+  let give: Player[] = mySurplus.slice(0, actualGiveCount)
   if (give.length === 0) return null
 
   // Never let a suggestion drop the user below a startable 53-man roster
@@ -1432,13 +1448,33 @@ function buildBigPackage(
     if (!wouldFitUnderCap(myRoster, give.map((p) => p.id), getSet)) return false
     const leavingIds = new Set(give.map((p) => p.id))
     const resulting = [...myRoster.filter((p) => !leavingIds.has(p.id)), ...getSet]
-    if (resulting.length < MIN_ROSTER_SIZE) return false
+    // A few players' worth of slack below the hard 53-man minimum is fine -
+    // free agency/autoFillRoster can always top the roster back up before
+    // kickoff, and requiring every single suggestion to net zero bodies was
+    // itself unrealistic (most real trades aren't perfectly even swaps).
+    // projectedRosterDelta accounts for the net headcount change already
+    // committed by earlier suggestions in this same list - without it,
+    // suggestions that each look safe in isolation could compound into a
+    // roster gutted well past the safety margin if the user acted on all
+    // of them.
+    if (resulting.length + projectedRosterDelta < MIN_ROSTER_SIZE - 4) return false
     const counts = new Map<string, number>()
     for (const p of resulting) counts.set(p.position, (counts.get(p.position) ?? 0) + 1)
     for (const position of Object.keys(ROSTER_SHAPE) as (keyof typeof ROSTER_SHAPE)[]) {
       if ((counts.get(position) ?? 0) === 0 && ROSTER_SHAPE[position] > 0) return false
     }
     return true
+  }
+
+  if (!wouldFitUnderCap(myRoster, give.map((p) => p.id), getSet)) {
+    // A cheapest-value give often barely dents the cap when getSet is
+    // several real upgrade targets at once (their higher salaries add up
+    // fast). Giving up a bigger contract frees a lot more room than a
+    // handful of minimum-salary bench pieces, so retry biased toward
+    // salary relief instead of pure trade value.
+    const bySalaryDesc = [...mySurplus].sort((a, b) => (b.contract?.salary ?? 0) - (a.contract?.salary ?? 0))
+    const salaryGive = bySalaryDesc.slice(0, actualGiveCount)
+    if (wouldFitUnderCap(myRoster, salaryGive.map((p) => p.id), getSet)) give = salaryGive
   }
 
   if (!rosterOkAfterGive(give)) return null
@@ -1448,7 +1484,7 @@ function buildBigPackage(
   // Not enough value yet - pad with more of our depth first (keeps it
   // players-for-players rather than reaching for picks immediately).
   let extraIdx = give.length
-  while (extraIdx < mySurplus.length && give.length < giveCount + 2) {
+  while (extraIdx < mySurplus.length && give.length < actualGiveCount + 2) {
     const extra = mySurplus[extraIdx]
     extraIdx++
     if (give.some((p) => p.id === extra.id)) continue
@@ -1480,11 +1516,11 @@ function buildBigPackage(
  * reads as offers from across the league, not just whichever team happens
  * to come first with a deep bench.
  *
- * Packages aren't limited to one-for-one: findAcceptablePackage tries 1 or
- * 2 of the user's own players, optionally with up to 2 owned picks stacked
- * on as a sweetener, and if even that isn't enough for a single target, a
- * second (lesser) target from the same team gets bundled in too - a real
- * "throw in a guy to make the numbers work" style package.
+ * Packages aren't limited to one-for-one: buildBigPackage targets a total
+ * headcount averaging ~6 players across both sides (occasionally more),
+ * split between a real upgrade target plus lower-value throw-ins on their
+ * side and several of the user's own depth pieces (plus picks if needed)
+ * on ours - a real "package deal", not a plain swap.
  *
  * `seed` shuffles which teams/candidates get looked at first, so calling
  * this again with a different seed (a "refresh" in the UI) surfaces a
@@ -1510,11 +1546,20 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
     return myNeeds.has(p.position) || !myBest || p.ratings.overall > myBest.ratings.overall + 4
   }
   const myBestAt = (pos: Position) => (myByPosition.get(pos) ?? []).sort((a, b) => b.ratings.overall - a.ratings.overall)[0]
+  // A player is only ever "surplus" if trading them away leaves a backup
+  // behind - never the sole player at a position the roster shape requires
+  // (a lone K or P, a QB2-less QB room, etc). Without this, a bigger
+  // give-package easily nets you giving up your only kicker or punter.
+  const myPositionHasBackup = (pos: Position) => (myByPosition.get(pos)?.length ?? 0) > 1
 
   const allMyPicks = [...ownedPicks(league.tradedPicks, league.season, allTeamIds, league.userTeamId, 5)].sort(
     (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
   )
   const usedGiveIds = new Set<number>()
+  // Net headcount change already locked in by earlier suggestions in this
+  // same list - suggestions that each look roster-safe in isolation could
+  // still compound into a real problem if the user acted on several at once.
+  let projectedRosterDelta = 0
   const usedPickKeys = new Set<string>()
   const pickKey = (r: TradePickRef) => `${r.year}-${r.round}-${r.originalTeamId}`
 
@@ -1566,7 +1611,13 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
       // more than I need the upgrade itself, and anything already promised
       // to an earlier suggestion in this same list.
       const mySurplus = myRoster
-        .filter((p) => p.id !== myBest?.id && !myNeeds.has(p.position) && !usedGiveIds.has(p.id))
+        .filter(
+          (p) =>
+            p.id !== myBest?.id &&
+            !myNeeds.has(p.position) &&
+            !usedGiveIds.has(p.id) &&
+            myPositionHasBackup(p.position),
+        )
         .sort((a, b) => playerValue(a) - playerValue(b))
       const picksAvailable = allMyPicks.filter((r) => !usedPickKeys.has(pickKey(r)))
 
@@ -1581,12 +1632,12 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
         theirCandidates,
         usedTheirIds,
         theirs,
-        wouldUpgradeMe,
         mySurplus,
         myRoster,
         picksAvailable,
         league.season,
         totalSize,
+        projectedRosterDelta,
       )
 
       if (!result) continue
@@ -1613,6 +1664,7 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
       result.give.forEach((p) => usedGiveIds.add(p.id))
       result.picks.forEach((r) => usedPickKeys.add(pickKey(r)))
       getSet.forEach((p) => usedTheirIds.add(p.id))
+      projectedRosterDelta += getSet.length - result.give.length
       state.added++
       return true
     }
