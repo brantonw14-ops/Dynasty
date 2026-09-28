@@ -1200,7 +1200,20 @@ export async function generateTradeOffers(leagueId: number) {
     })
     if (secondCandidate) requestTargets.push(secondCandidate)
   }
-  const requestValue = requestTargets.reduce((sum, p) => sum + playerValue(p), 0)
+  // Sometimes the AI's ask also includes one of the user's own picks -
+  // real trades aren't purely player-for-player, and a request package was
+  // never able to include a pick before (only the AI's own offer could).
+  // Prefers the user's cheapest owned pick, same as offerPicks below - a
+  // throw-in, not a demand for their best future first.
+  let requestPicks: TradePickRef[] = []
+  if (rng() < 0.3) {
+    const userPicks = ownedPicks(league.tradedPicks, league.season, allTeamIds, league.userTeamId, 3).sort(
+      (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
+    )
+    if (userPicks.length > 0) requestPicks = [userPicks[0]]
+  }
+  const requestPickValue = requestPicks.reduce((sum, r) => sum + pickValue(r.round, r.year - league.season), 0)
+  const requestValue = requestTargets.reduce((sum, p) => sum + playerValue(p), 0) + requestPickValue
 
   // Build a "give" package from the offering team's own surplus (positions
   // they're not short on), aiming to clear the requested value with a
@@ -1219,18 +1232,24 @@ export async function generateTradeOffers(leagueId: number) {
     if (offerPlayers.length >= 2) break
   }
 
+  const fromPicks = ownedPicks(league.tradedPicks, league.season, allTeamIds, fromTeamId, 3).sort(
+    (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
+  )
   let offerPicks: TradePickRef[] = []
   if (offerValue < requestValue) {
-    const picks = ownedPicks(league.tradedPicks, league.season, allTeamIds, fromTeamId, 3).sort(
-      (a, b) => pickValue(a.round, a.year - league.season) - pickValue(b.round, b.year - league.season),
-    )
-    for (const ref of picks) {
+    for (const ref of fromPicks) {
       const v = pickValue(ref.round, ref.year - league.season)
       if (offerValue >= requestValue) break
       offerPicks.push(ref)
       offerValue += v
       if (offerPicks.length >= 2) break
     }
+  } else if (rng() < 0.2 && fromPicks.length > 0) {
+    // Occasionally sweetens an already-fair offer with one extra small
+    // pick anyway, just to make it a clearly good deal - not every offer
+    // needs a pick to work, but real trades throw one in for goodwill too.
+    offerPicks = [fromPicks[0]]
+    offerValue += pickValue(fromPicks[0].round, fromPicks[0].year - league.season)
   }
 
   if (offerValue < requestValue * 0.9 || (offerPlayers.length === 0 && offerPicks.length === 0)) return
@@ -1241,7 +1260,7 @@ export async function generateTradeOffers(leagueId: number) {
     offerPlayerIds: offerPlayers.map((p) => p.id),
     offerPicks,
     requestPlayerIds: requestTargets.map((p) => p.id),
-    requestPicks: [],
+    requestPicks,
   }
 
   await db.leagues.update(leagueId, {
