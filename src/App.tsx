@@ -253,7 +253,7 @@ function TeamPositionPanel({
                       <th className="py-1 pr-4 text-right">OVR</th>
                       <th className="py-1 pr-4 text-right">POT</th>
                       <th className="py-1 pr-4 text-right">Salary</th>
-                      <th className="py-1"></th>
+                      <th className="py-1 sticky right-0 bg-[#0f172a]"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -284,7 +284,7 @@ function TeamPositionPanel({
                         <td className="py-1 pr-4 text-right whitespace-nowrap">
                           {p.contract ? formatMoney(p.contract.salary) : '-'}
                         </td>
-                        <td className="py-1 text-right">
+                        <td className="py-1 text-right sticky right-0 bg-[#0f172a] pl-2">
                           <button
                             onClick={() => handleCut(p.id, `${p.firstName} ${p.lastName}`)}
                             disabled={cuttingId === p.id}
