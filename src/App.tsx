@@ -31,6 +31,7 @@ import {
   type TeamPreview,
 } from './engine/league'
 import { computeCapSpace } from './engine/freeAgency'
+import { retirementChance } from './engine/retirement'
 import { computeTeamStats } from './engine/teamStats'
 import { buildCoachReport, buildGameHeadlines, buildGameRecap, classifyGamePerformance, performanceBlurb } from './engine/gameReport'
 import {
@@ -392,6 +393,22 @@ function overallColor(n: number) {
   if (n >= 70) return 'text-emerald-400'
   if (n >= 60) return 'text-white'
   return 'text-orange-600'
+}
+
+/**
+ * Flags a player who's a real chance to retire at the *next* offseason
+ * transition (age+1, matching ageAndRetire's own nextAge) - lets the user
+ * see it coming instead of a player just vanishing. Note this doesn't mean
+ * extending them prevents it: retirement here is purely age/position-driven
+ * and never looks at contract status, same as real life (a player can
+ * retire under contract) - the actual value is knowing to get final trade
+ * value out of them before they're gone for nothing.
+ */
+function retirementRiskBadge(p: { position: Position; age: number }): { label: string; className: string } | null {
+  const chance = retirementChance(p.position, p.age + 1)
+  if (chance >= 0.6) return { label: `${Math.round(chance * 100)}% retirement risk`, className: 'bg-red-900 text-red-200' }
+  if (chance >= 0.3) return { label: `${Math.round(chance * 100)}% retirement risk`, className: 'bg-amber-900 text-amber-200' }
+  return null
 }
 
 /** A position's 3 attribute ratings always keep the same color by slot (1st/2nd/3rd), so e.g. Speed reads as the same color everywhere it appears, not colored by how good this particular player's number happens to be. */
@@ -813,8 +830,8 @@ function RosterView({
                         </div>
                       )}
                     </div>
-                    {(p.injury || p.onTradeBlock) && (
-                      <div className="flex gap-1.5 mb-1">
+                    {(p.injury || p.onTradeBlock || retirementRiskBadge(p)) && (
+                      <div className="flex gap-1.5 mb-1 flex-wrap">
                         {p.injury && (
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-900 text-red-200">
                             {p.injury.description} · {p.injury.weeksRemaining}wk
@@ -822,6 +839,14 @@ function RosterView({
                         )}
                         {p.onTradeBlock && (
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-200">on block</span>
+                        )}
+                        {retirementRiskBadge(p) && (
+                          <span
+                            className={`text-[9px] px-1.5 py-0.5 rounded ${retirementRiskBadge(p)!.className}`}
+                            title="May retire at the end of this season - extending won't change that, but you could trade them for value while you still can."
+                          >
+                            {retirementRiskBadge(p)!.label}
+                          </span>
                         )}
                       </div>
                     )}
@@ -933,6 +958,14 @@ function RosterView({
                         {p.onTradeBlock && (
                           <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-200">
                             on block
+                          </span>
+                        )}
+                        {retirementRiskBadge(p) && (
+                          <span
+                            className={`ml-2 text-[10px] px-1.5 py-0.5 rounded ${retirementRiskBadge(p)!.className}`}
+                            title="May retire at the end of this season - extending won't change that, but you could trade them for value while you still can."
+                          >
+                            {retirementRiskBadge(p)!.label}
                           </span>
                         )}
                       </td>
@@ -2809,6 +2842,14 @@ function ResignView({
                       expiring
                     </span>
                   )}
+                  {retirementRiskBadge(p) && (
+                    <span
+                      className={`ml-2 text-[10px] px-1.5 py-0.5 rounded ${retirementRiskBadge(p)!.className}`}
+                      title="May retire at the end of next season - extending won't change that, but you could trade them for value while you still can."
+                    >
+                      {retirementRiskBadge(p)!.label}
+                    </span>
+                  )}
                 </td>
                 <td className="py-1 px-2">{p.position}</td>
                 <td className="py-1 px-2 text-right">{p.age}</td>
@@ -3341,6 +3382,30 @@ function DraftView({
         </>
       ) : (
         <>
+          <div className="sm:hidden flex items-center gap-2 mb-2 text-xs">
+            <span className="text-gray-500">Sort by</span>
+            {(
+              [
+                { key: 'overall', label: 'OVR' },
+                { key: 'pot', label: 'POT' },
+                { key: 'age', label: 'Age' },
+                { key: 'name', label: 'Name' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() =>
+                  setSort({ key: opt.key, dir: sort.key === opt.key && sort.dir === 'desc' ? 'asc' : 'desc' })
+                }
+                className={`px-2 py-1 rounded border whitespace-nowrap ${
+                  sort.key === opt.key ? 'border-blue-500 bg-blue-900/50 text-blue-200' : 'border-slate-700 text-gray-400'
+                }`}
+              >
+                {opt.label}
+                {sort.key === opt.key && (sort.dir === 'desc' ? ' ▼' : ' ▲')}
+              </button>
+            ))}
+          </div>
           <div className="sm:hidden flex flex-col gap-2">
             {sorted.map((p) => {
               const needed = userNeeds.has(p.position)

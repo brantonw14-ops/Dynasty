@@ -11,7 +11,15 @@ import type { Rng } from './rng'
  * QB can play deep into his late 30s/40s but a running back almost never
  * does.
  */
-function retirementChance(position: Player['position'], age: number) {
+/**
+ * Exported so the UI can flag "at risk to retire next offseason" players -
+ * note that in this sim, retirement is purely age/position-driven and does
+ * not look at contract status at all, so extending a player's deal doesn't
+ * change their retirement odds (same as real life: a player can retire
+ * under contract). The practical value of surfacing this is knowing to get
+ * final value via a trade, not "saving" them by extending.
+ */
+export function retirementChance(position: Player['position'], age: number) {
   const { averageRetirement, maxAge } = POSITION_AGE_PROFILE[position]
   if (age >= maxAge) return 1
   if (age < averageRetirement - 8) return 0
