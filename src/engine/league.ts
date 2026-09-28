@@ -1583,6 +1583,26 @@ export async function findSuggestedTrades(leagueId: number, limit = 5, seed = 0)
 
       if (!result) continue
 
+      // A single-give, no-picks match technically "worked" by value, but
+      // presenting it bare made almost every suggestion read as a plain
+      // 1-for-1 trade regardless of the preferPairs bias above (a cheap
+      // single piece is "acceptable" far more often than a pair is, so it
+      // kept winning even when tryPairs was attempted first and failed).
+      // Staple on one more low-cost piece - a spare surplus player or an
+      // unused owned pick - whenever one exists: extra value only makes
+      // the other side happier, so it can never break their acceptance.
+      if (result.give.length + result.picks.length < 2 && rng() < 0.85) {
+        const usedInDeal = new Set(result.give.map((p) => p.id))
+        const usedPickKeysInDeal = new Set(result.picks.map(pickKey))
+        const extraPick = picksAvailable.find((r) => !usedPickKeysInDeal.has(pickKey(r)))
+        const extraPlayer = mySurplus.find((p) => !usedInDeal.has(p.id))
+        if (extraPick) {
+          result = { give: result.give, picks: [...result.picks, extraPick] }
+        } else if (extraPlayer) {
+          result = { give: [...result.give, extraPlayer], picks: result.picks }
+        }
+      }
+
       const reasonFor = (p: Player) => {
         const best = myBestAt(p.position)
         return myNeeds.has(p.position)
