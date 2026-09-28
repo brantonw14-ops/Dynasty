@@ -711,7 +711,7 @@ function RosterView({
             <div className="text-[11px] text-gray-500">Team overall</div>
           </div>
           <div className="border border-slate-800 rounded-md px-3 py-2 text-center sm:text-left">
-            <div className={`text-lg font-semibold ${capSpace < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+            <div className={`text-lg font-semibold ${capSpace < 0 ? 'text-red-400' : 'text-orange-400'}`}>
               {formatMoney(capSpace)}
             </div>
             <div className="text-[11px] text-gray-500">
@@ -736,6 +736,7 @@ function RosterView({
           </button>
         )}
       </div>
+      <TeamPositionPanel roster={roster} leagueId={leagueId} needs={rosterNeeds(roster)} />
       {editable && (
         <p className="text-xs text-gray-500 mb-4">
           Use the arrows to move a player up into the starting group (green) or down to the bench (gray) - starters
@@ -1455,7 +1456,11 @@ function GameReportView({
         <h3 className="text-sm font-semibold text-gray-500 mb-2">Season Trends - Where to Upgrade</h3>
         <p className="text-xs text-gray-500 mb-2">
           Positions with more bad games than good ones across the {sortedGames.length} game(s) played so far this season - a
-          single rough game is noise, a repeated one is a real weakness. Cap space: {formatMoney(capSpace)}.
+          single rough game is noise, a repeated one is a real weakness. Cap space:{' '}
+          <span className={`font-semibold ${capSpace < 0 ? 'text-red-400' : 'text-orange-400'}`}>
+            {formatMoney(capSpace)}
+          </span>
+          .
         </p>
         {weakPositions.length === 0 && (
           <p className="text-xs text-gray-500">No position has a losing performance trend yet.</p>
@@ -2618,7 +2623,10 @@ function ResignView({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <p className="text-sm text-gray-500">
           Re-sign expiring contracts, extend anyone you want to lock up longer, or cut players you don't
-          want - all before free agency opens. Cap space {formatMoney(capSpace)}
+          want - all before free agency opens. Cap space{' '}
+          <span className={`font-semibold ${capSpace < 0 ? 'text-red-400' : 'text-orange-400'}`}>
+            {formatMoney(capSpace)}
+          </span>
           {needsDecisionCount > 0 && (
             <>
               {' '}
@@ -2841,7 +2849,10 @@ function FreeAgencyView({
             {roster.length}/{MIN_ROSTER_SIZE}
           </span>{' '}
           &middot; <InfoTip label="Cap space" tip="How much salary you can still add before hitting the league salary cap." />{' '}
-          <span className={capSpace < 0 ? 'text-red-400 font-semibold' : ''}>{formatMoney(capSpace)}</span> &middot;{' '}
+          <span className={`font-semibold ${capSpace < 0 ? 'text-red-400' : 'text-orange-400'}`}>
+            {formatMoney(capSpace)}
+          </span>{' '}
+          &middot;{' '}
           <InfoTip label="Needs" tip="Positions below your target roster count at that spot - these are the safest signs to make." />:{' '}
           {needs.length > 0 ? [...new Set(needs)].join(', ') : 'roster full'}
         </p>
