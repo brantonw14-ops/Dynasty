@@ -52,6 +52,7 @@ import type {
   Division,
   GameResult,
   LeaguePhase,
+  OffseasonDeparture,
   PendingTradeOffer,
   Player,
   PlayerGameStats,
@@ -2460,15 +2461,73 @@ function StatsLeadersView({
   )
 }
 
+/**
+ * "What happened to my roster" report shown at the top of the resign
+ * screen - retirements otherwise just make a player vanish with no
+ * explanation at all (unlike an expiring contract, which at least stays
+ * visible as a null-contract row the user can act on), so this exists to
+ * name names and give a reason for every departure from the season that
+ * just ended.
+ */
+function OffseasonReport({ departures }: { departures: OffseasonDeparture[] }) {
+  const retired = departures.filter((d) => d.reason === 'retired')
+  const expired = departures.filter((d) => d.reason === 'contract_expired')
+  return (
+    <div className="mb-4 border border-amber-800 rounded-md px-4 py-3 bg-amber-950/20">
+      <h3 className="text-sm font-semibold text-amber-300 mb-2">
+        Offseason Report - {departures.length} player{departures.length === 1 ? '' : 's'} left your roster
+      </h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+        {retired.length > 0 && (
+          <div>
+            <p className="text-gray-400 mb-1">
+              Retired ({retired.length}) - gone for good, no decision to make
+            </p>
+            <ul className="space-y-0.5">
+              {retired.map((d, i) => (
+                <li key={i} className="text-gray-300">
+                  <span className="font-medium text-white">{d.name}</span>{' '}
+                  <span className="text-gray-500">
+                    ({d.position}, {d.overall} OVR, age {d.age})
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {expired.length > 0 && (
+          <div>
+            <p className="text-gray-400 mb-1">
+              Contract expired ({expired.length}) - still on your roster below, re-sign or let them walk
+            </p>
+            <ul className="space-y-0.5">
+              {expired.map((d, i) => (
+                <li key={i} className="text-gray-300">
+                  <span className="font-medium text-white">{d.name}</span>{' '}
+                  <span className="text-gray-500">
+                    ({d.position}, {d.overall} OVR, age {d.age})
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ResignView({
   leagueId,
   userTeamId,
   season,
+  departures,
   onOpenFreeAgency,
 }: {
   leagueId: number
   userTeamId: number
   season: number
+  departures: OffseasonDeparture[]
   onOpenFreeAgency: () => void
 }) {
   const roster = useLiveQuery(
@@ -2577,6 +2636,8 @@ function ResignView({
       </div>
 
       {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+
+      {departures.length > 0 && <OffseasonReport departures={departures} />}
 
       <TeamPositionPanel roster={roster} leagueId={leagueId} needs={needs} />
 
@@ -3632,6 +3693,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             leagueId={leagueId}
             userTeamId={league.userTeamId}
             season={league.season}
+            departures={league.offseasonDepartures ?? []}
             onOpenFreeAgency={() => setTab('league')}
           />
         </>

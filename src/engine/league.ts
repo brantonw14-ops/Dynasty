@@ -4,6 +4,7 @@ import type {
   DraftPickLogEntry,
   Division,
   GameResult,
+  OffseasonDeparture,
   PendingTradeOffer,
   Player,
   PlayoffRound,
@@ -529,6 +530,33 @@ export async function advanceToFreeAgency(leagueId: number) {
   // decision, so the user gets the same kind of chance manually.
   const finalPlayers = expireContractsWithAiRetention(rng, progressedPlayers, league.userTeamId)
 
+  // A retirement otherwise just makes a player vanish with zero record of
+  // it ever happening (unlike an expiring contract, which at least stays
+  // visible as a null-contract row) - capture both here so the resign
+  // screen can show a real "here's what happened to your roster" report
+  // instead of the user just finding players missing with no explanation.
+  const retiredIdSet = new Set(retiredIds)
+  const offseasonDepartures: OffseasonDeparture[] = withUpdatedPotential
+    .filter((p) => p.teamId === league.userTeamId && retiredIdSet.has(p.id))
+    .map((p) => ({
+      name: `${p.firstName} ${p.lastName}`,
+      position: p.position,
+      overall: p.ratings.overall,
+      age: p.age + 1,
+      reason: 'retired' as const,
+    }))
+  for (const p of finalPlayers) {
+    if (p.teamId === league.userTeamId && p.contract === null) {
+      offseasonDepartures.push({
+        name: `${p.firstName} ${p.lastName}`,
+        position: p.position,
+        overall: p.ratings.overall,
+        age: p.age,
+        reason: 'contract_expired',
+      })
+    }
+  }
+
   if (retiredIds.length > 0) await db.players.bulkDelete(retiredIds)
   await db.players.bulkPut(finalPlayers as never[])
 
@@ -539,6 +567,7 @@ export async function advanceToFreeAgency(leagueId: number) {
     season: nextSeason,
     phase: 'resign',
     champTeamId: null,
+    offseasonDepartures,
   })
 
   return { retiredCount: retiredIds.length, freeAgentCount }

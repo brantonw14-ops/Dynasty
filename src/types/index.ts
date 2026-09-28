@@ -181,6 +181,21 @@ export interface PendingTradeOffer {
   requestPicks: TradePickRef[]
 }
 
+/**
+ * One player who left the user's roster during the most recent offseason
+ * transition, for the resign screen's "what happened to my roster" report -
+ * without this, a retirement is just a player silently disappearing with no
+ * record at all (unlike an expiring contract, which at least stays visible
+ * as a null-contract row until the user acts on it).
+ */
+export interface OffseasonDeparture {
+  name: string
+  position: Position
+  overall: number
+  age: number
+  reason: 'retired' | 'contract_expired'
+}
+
 export interface League {
   id: number
   name: string
@@ -191,6 +206,9 @@ export interface League {
   champTeamId: number | null
   userTeamId: number | null
   createdAt: number
+  // Only ever set by the offseason transition that just happened, and
+  // cleared once free agency opens - see OffseasonDeparture.
+  offseasonDepartures?: OffseasonDeparture[]
   // Draft-in-progress state. The prospect pool itself is never persisted -
   // it's regenerated on demand from draftSeed (deterministic), only which
   // prospects have been taken and whose turn it is needs to live here.
