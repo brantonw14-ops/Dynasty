@@ -1397,6 +1397,27 @@ const TRADE_SIZE_POOL = [3, 4, 4, 5, 5, 5, 6, 6, 6, 6, 7, 7, 8, 9, 10]
  * offer can never break their acceptance, so padding is always safe - it
  * just costs us a bit more surplus than the bare minimum would have.
  */
+/**
+ * Greedily takes up to `count` players from `source` (in order), skipping
+ * any player whose position is already down to its last one - several cheap
+ * players can cluster at the same thin position in a value-sorted list
+ * (both TEs, most of a 3-man LB room), and taking all of them together
+ * would zero that position out even though each one individually looked
+ * like safe "surplus".
+ */
+function pickWithPositionFloor(source: Player[], count: number, myRoster: Player[]): Player[] {
+  const remaining = new Map<Position, number>()
+  for (const p of myRoster) remaining.set(p.position, (remaining.get(p.position) ?? 0) + 1)
+  const picked: Player[] = []
+  for (const p of source) {
+    if (picked.length >= count) break
+    if ((remaining.get(p.position) ?? 0) <= 1) continue
+    picked.push(p)
+    remaining.set(p.position, (remaining.get(p.position) ?? 1) - 1)
+  }
+  return picked
+}
+
 function buildBigPackage(
   theirRoster: Player[],
   theirNeeds: Set<Position>,
@@ -1416,8 +1437,9 @@ function buildBigPackage(
   // every suggestion shrank the user's roster, which on an already-full
   // 53-man roster tripped the roster-size safety check below and killed
   // nearly all suggestions.
-  const getCount = Math.max(1, Math.min(4, Math.round(totalSize * 0.35)))
-  const giveCount = Math.max(1, totalSize - getCount)
+  const attempt = (targetGetCount: number, attemptTotalSize: number): { give: Player[]; picks: TradePickRef[]; get: Player[] } | null => {
+  const getCount = targetGetCount
+  const giveCount = Math.max(1, attemptTotalSize - getCount)
   const getSet = [primaryTarget]
   // Extra "get" slots beyond the primary target are throw-ins, not more
   // stars - each additional real upgrade piled onto getSet multiplies the
@@ -1437,7 +1459,7 @@ function buildBigPackage(
   // shrink what we give too - a short getSet inflating giveCount was the
   // actual cause of every suggestion tripping the roster-size guard below.
   const actualGiveCount = Math.max(1, giveCount - (getCount - getSet.length))
-  let give: Player[] = mySurplus.slice(0, actualGiveCount)
+  let give: Player[] = pickWithPositionFloor(mySurplus, actualGiveCount, myRoster)
   if (give.length === 0) return null
 
   // Never let a suggestion drop the user below a startable 53-man roster
@@ -1448,16 +1470,18 @@ function buildBigPackage(
     if (!wouldFitUnderCap(myRoster, give.map((p) => p.id), getSet)) return false
     const leavingIds = new Set(give.map((p) => p.id))
     const resulting = [...myRoster.filter((p) => !leavingIds.has(p.id)), ...getSet]
-    // A few players' worth of slack below the hard 53-man minimum is fine -
-    // free agency/autoFillRoster can always top the roster back up before
-    // kickoff, and requiring every single suggestion to net zero bodies was
-    // itself unrealistic (most real trades aren't perfectly even swaps).
-    // projectedRosterDelta accounts for the net headcount change already
-    // committed by earlier suggestions in this same list - without it,
-    // suggestions that each look safe in isolation could compound into a
-    // roster gutted well past the safety margin if the user acted on all
-    // of them.
-    if (resulting.length + projectedRosterDelta < MIN_ROSTER_SIZE - 4) return false
+    // Real slack below the hard 53-man minimum is fine - free agency/
+    // autoFillRoster can always top the roster back up before kickoff, and
+    // requiring every single suggestion to net zero bodies was itself
+    // unrealistic (most real trades aren't perfectly even swaps). This is
+    // a backstop against genuinely pathological packages, not a per-trade
+    // balance requirement - too tight a number here (an earlier version
+    // used -4) meant one accepted multi-piece suggestion could exhaust the
+    // whole batch's headroom and silently block every suggestion after it.
+    // projectedRosterDelta still accounts for headcount already committed
+    // by earlier suggestions in this same list, so an extreme *combination*
+    // is still caught even though no single suggestion is.
+    if (resulting.length + projectedRosterDelta < MIN_ROSTER_SIZE - 16) return false
     const counts = new Map<string, number>()
     for (const p of resulting) counts.set(p.position, (counts.get(p.position) ?? 0) + 1)
     for (const position of Object.keys(ROSTER_SHAPE) as (keyof typeof ROSTER_SHAPE)[]) {
@@ -1466,20 +1490,40 @@ function buildBigPackage(
     return true
   }
 
+  // A suggestion has to be a reasonable deal for the user too, not just one
+  // the AI happens to accept - the AI-side fairness check alone let the cap
+  // fallback below hand over the user's actual stars (freeing much more cap
+  // room than cheap bench salary) for a mediocre return, since nothing was
+  // checking the trade from the user's side of the ledger.
+  const goodForUser = (give: Player[], picks: TradePickRef[]): boolean => {
+    const giveValue = give.reduce((sum, p) => sum + playerValue(p), 0)
+    const getValue =
+      getSet.reduce((sum, p) => sum + playerValue(p), 0) +
+      picks.reduce((sum, r) => sum + pickValue(r.round, r.year - season), 0)
+    return getValue >= giveValue * 0.85
+  }
+
   if (!wouldFitUnderCap(myRoster, give.map((p) => p.id), getSet)) {
     // A cheapest-value give often barely dents the cap when getSet is
     // several real upgrade targets at once (their higher salaries add up
     // fast). Giving up a bigger contract frees a lot more room than a
     // handful of minimum-salary bench pieces, so retry biased toward
-    // salary relief instead of pure trade value.
+    // salary relief instead of pure trade value - but only if that's still
+    // a fair swap for the user (see goodForUser above), otherwise this
+    // whole match isn't realistic and should be abandoned rather than
+    // handing over a star to satisfy the cap.
     const bySalaryDesc = [...mySurplus].sort((a, b) => (b.contract?.salary ?? 0) - (a.contract?.salary ?? 0))
-    const salaryGive = bySalaryDesc.slice(0, actualGiveCount)
-    if (wouldFitUnderCap(myRoster, salaryGive.map((p) => p.id), getSet)) give = salaryGive
+    const salaryGive = pickWithPositionFloor(bySalaryDesc, actualGiveCount, myRoster)
+    if (wouldFitUnderCap(myRoster, salaryGive.map((p) => p.id), getSet) && goodForUser(salaryGive, [])) {
+      give = salaryGive
+    } else {
+      return null
+    }
   }
 
   if (!rosterOkAfterGive(give)) return null
 
-  if (evaluateTrade(theirRoster, getSet, give).accepted) return { give, picks: [], get: getSet }
+  if (evaluateTrade(theirRoster, getSet, give).accepted && goodForUser(give, [])) return { give, picks: [], get: getSet }
 
   // Not enough value yet - pad with more of our depth first (keeps it
   // players-for-players rather than reaching for picks immediately).
@@ -1490,7 +1534,7 @@ function buildBigPackage(
     if (give.some((p) => p.id === extra.id)) continue
     if (!rosterOkAfterGive([...give, extra])) continue
     give.push(extra)
-    if (evaluateTrade(theirRoster, getSet, give).accepted) return { give, picks: [], get: getSet }
+    if (evaluateTrade(theirRoster, getSet, give).accepted && goodForUser(give, [])) return { give, picks: [], get: getSet }
   }
 
   // Still short - stack owned picks on top as a sweetener.
@@ -1499,10 +1543,23 @@ function buildBigPackage(
   for (const pick of picksAvailable) {
     sweetenerValue += pickValue(pick.round, pick.year - season)
     picks = [...picks, pick]
-    if (evaluateTrade(theirRoster, getSet, give, 0, sweetenerValue).accepted) return { give, picks, get: getSet }
+    if (evaluateTrade(theirRoster, getSet, give, 0, sweetenerValue).accepted && goodForUser(give, picks)) {
+      return { give, picks, get: getSet }
+    }
     if (picks.length >= 2) break
   }
   return null
+  }
+
+  const targetGetCount = Math.max(1, Math.min(4, Math.round(totalSize * 0.35)))
+  // If the full-ambition attempt can't find a fair, cap-legal package (most
+  // often because getting several real upgrades at once would force
+  // shedding a star just to fit the salary cap), fall back to asking for
+  // just the primary target alone - a smaller, realistic ask beats no
+  // suggestion at all. The fallback also shrinks totalSize to match (a
+  // single target doesn't justify the same give-side headcount a 4-target
+  // package would have).
+  return attempt(targetGetCount, totalSize) ?? (targetGetCount > 1 ? attempt(1, Math.min(totalSize, 4)) : null)
 }
 
 /**
