@@ -13,6 +13,7 @@ import type {
   TradedPick,
   TradePickRef,
 } from '../types'
+import { computeSeasonAwards } from './awards'
 import { generateDraftClass, generateDraftClassPositions, prospectToPlayer, type CollegeProspect } from './draft'
 import { computeCapSpace, expireContractsWithAiRetention, runFreeAgency } from './freeAgency'
 import { simGame, type PlayerBoxScore } from './gameSim'
@@ -146,13 +147,14 @@ export async function deleteLeague(leagueId: number) {
   // path took minutes instead of milliseconds.
   await db.transaction(
     'rw',
-    [db.leagues, db.teams, db.players, db.games, db.schedule, db.playerGameStats],
+    [db.leagues, db.teams, db.players, db.games, db.schedule, db.playerGameStats, db.playerAwards],
     async () => {
       await db.players.clear()
       await db.teams.clear()
       await db.games.clear()
       await db.schedule.clear()
       await db.playerGameStats.clear()
+      await db.playerAwards.clear()
       await db.leagues.delete(leagueId)
     },
   )
@@ -443,6 +445,19 @@ async function simPlayoffRound(leagueId: number) {
     const finalGame = (await currentSeasonPlayoffGames(leagueId, league.season, 'superbowl'))[0]
     const champTeamId = winnerOf(finalGame)
     await db.leagues.update(leagueId, { week: league.week + 1, phase: 'complete', champTeamId })
+
+    // Awards are graded on the regular season only (playoff sample sizes are
+    // too small/skewed - one hot divisional game shouldn't out-rank a full
+    // 17-game MVP case) - so this must run now, before advanceToFreeAgency
+    // ages everyone and increments `experience`, which is what OROY/DROY use
+    // to know who was actually a rookie this season.
+    const allPlayers = await db.players.toArray()
+    const regularSeasonGameIds = new Set((await currentSeasonRegularGames(leagueId, league.season)).map((g) => g.id))
+    const regularSeasonStats = (
+      await db.playerGameStats.where('[leagueId+season]').equals([leagueId, league.season]).toArray()
+    ).filter((s) => regularSeasonGameIds.has(s.gameId))
+    const awards = computeSeasonAwards(leagueId, league.season, allPlayers, regularSeasonStats)
+    if (awards.length > 0) await db.playerAwards.bulkAdd(awards as never[])
     return
   }
 }

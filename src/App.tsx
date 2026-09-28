@@ -48,6 +48,7 @@ import {
   STARTER_COUNTS,
   type DepthChartProjection,
 } from './engine/players'
+import { type AwardCategory, type SeasonAward } from './engine/awards'
 import { passerRating } from './engine/gameSim'
 import { marketSalary } from './engine/salary'
 import { gradeSeasonPerformance, type SeasonGrade } from './engine/seasonPerformance'
@@ -375,6 +376,7 @@ const TAB_DESCRIPTIONS: Record<string, string> = {
   freeagents: 'Unsigned players available to sign right now - sorted by overall so the best players are easy to find.',
   teamstats: 'Team-level offense, defense, and turnover stats for the current season - your team at a glance, then every team sortable.',
   stats: 'League-wide statistical leaders for the current season.',
+  awards: 'End-of-season awards and Pro Bowl selections, by season and by player.',
   history: 'Every past season’s champion and final standings.',
 }
 
@@ -2687,6 +2689,170 @@ function StatsLeadersView({
   )
 }
 
+const AWARD_LABELS: Record<AwardCategory, string> = {
+  mvp: 'MVP',
+  opoy: 'Offensive Player of the Year',
+  dpoy: 'Defensive Player of the Year',
+  oroy: 'Offensive Rookie of the Year',
+  droy: 'Defensive Rookie of the Year',
+  probowl: 'Pro Bowl',
+}
+
+/** The short "mvp-1", "pb-2026" style badge string used both in AwardsView and on a player's own card. */
+function awardBadgeText(a: SeasonAward) {
+  if (a.category === 'probowl') return `pb-${a.season}`
+  return `${a.category}-${a.rank}`
+}
+
+/** End-of-season awards (MVP/OPOY/DPOY/OROY/DROY, top 5 each) and Pro Bowl selections, browsable by season. */
+function AwardsView({ leagueId, season, userTeamId }: { leagueId: number; season: number; userTeamId: number | null }) {
+  const allAwards = useLiveQuery(() => db.playerAwards.where('leagueId').equals(leagueId).toArray(), [leagueId])
+  const teams = useLiveQuery(() => db.teams.toArray(), [])
+  const players = useLiveQuery(() => db.players.toArray(), [])
+  const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
+
+  if (!allAwards || !teams || !players) return <p className="text-sm text-gray-500">Loading awards...</p>
+
+  const seasons = [...new Set(allAwards.map((a) => a.season))].sort((a, b) => b - a)
+  if (seasons.length === 0) {
+    return <p className="text-sm text-gray-500">No awards yet - they're handed out once a season's playoffs finish.</p>
+  }
+  // Awards are recorded under the season that just finished, but `league.season`
+  // has usually already ticked forward to the *next* season by the time the
+  // user is looking at this screen (offseason transition bumps it right
+  // away) - default to the most recent season that actually has awards
+  // instead of the league's current season number, which would show "no
+  // data" right after every single season completes.
+  const activeSeason = selectedSeason != null && seasons.includes(selectedSeason) ? selectedSeason : seasons.includes(season) ? season : seasons[0]
+
+  const teamById = new Map(teams.map((t) => [t.id, t]))
+  const playerById = new Map(players.map((p) => [p.id, p]))
+  const teamLabel = (teamId: number | null) => {
+    if (teamId == null) return ''
+    const t = teamById.get(teamId)
+    return t ? ` (${t.abbrev})` : ''
+  }
+  const isUserAward = (a: SeasonAward) => a.teamId != null && a.teamId === userTeamId
+  const currentTeamOf = (playerId: number) => playerById.get(playerId)?.teamId ?? null
+
+  const seasonAwards = allAwards.filter((a) => a.season === activeSeason)
+  const majorCategories: AwardCategory[] = ['mvp', 'opoy', 'dpoy', 'oroy', 'droy']
+  const proBowl = seasonAwards.filter((a) => a.category === 'probowl').sort((a, b) => a.position.localeCompare(b.position))
+
+  const careerAwards = allAwards
+    .filter((a) => a.playerId != null)
+    .reduce((map, a) => {
+      const list = map.get(a.playerId) ?? []
+      list.push(a)
+      map.set(a.playerId, list)
+      return map
+    }, new Map<number, SeasonAward[]>())
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        <label className="text-xs text-gray-500">Season</label>
+        <select
+          value={activeSeason}
+          onChange={(e) => setSelectedSeason(Number(e.target.value))}
+          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm"
+        >
+          {seasons.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6 mb-8">
+        {majorCategories.map((cat) => {
+          const rows = seasonAwards.filter((a) => a.category === cat).sort((a, b) => a.rank - b.rank)
+          return (
+            <div key={cat}>
+              <h3 className="text-sm font-semibold mb-2">{AWARD_LABELS[cat]}</h3>
+              {rows.length === 0 ? (
+                <p className="text-xs text-gray-500">Not enough data this season.</p>
+              ) : (
+                <table className="w-full table-fixed text-sm border-collapse data-table">
+                  <tbody>
+                    {rows.map((a) => (
+                      <tr
+                        key={a.id}
+                        className={`border-b ${isUserAward(a) ? 'bg-blue-900/50 border-l-2 border-l-blue-400 text-blue-100 font-medium' : ''}`}
+                      >
+                        <td className="py-1 text-gray-400 w-5 pl-1">{a.rank}</td>
+                        <td className="py-1 truncate">
+                          {a.playerName}
+                          {teamLabel(currentTeamOf(a.playerId) ?? a.teamId)}
+                        </td>
+                        <td className="py-1 text-right text-gray-500 w-14">{a.position}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <h3 className="text-sm font-semibold mb-2">Pro Bowl ({activeSeason})</h3>
+      {proBowl.length === 0 ? (
+        <p className="text-xs text-gray-500 mb-6">No Pro Bowl selections this season.</p>
+      ) : (
+        <div className="flex flex-wrap gap-2 mb-6">
+          {proBowl.map((a) => (
+            <span
+              key={a.id}
+              className={`text-xs px-2 py-1 rounded border ${
+                isUserAward(a) ? 'border-blue-500 bg-blue-900/40 text-blue-100' : 'border-slate-700 bg-slate-800/60 text-gray-300'
+              }`}
+            >
+              {a.position} - {a.playerName}
+              {teamLabel(currentTeamOf(a.playerId) ?? a.teamId)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {userTeamId != null && (
+        <>
+          <h3 className="text-sm font-semibold mb-2">Your Roster's Career Award History</h3>
+          {(() => {
+            const myPlayers = players
+              .filter((p) => p.teamId === userTeamId)
+              .map((p) => ({ player: p, awards: careerAwards.get(p.id) ?? [] }))
+              .filter((r) => r.awards.length > 0)
+              .sort((a, b) => b.awards.length - a.awards.length)
+            if (myPlayers.length === 0) {
+              return <p className="text-xs text-gray-500">No one on your roster has won an award yet.</p>
+            }
+            return (
+              <ul className="space-y-1 text-sm">
+                {myPlayers.map(({ player, awards }) => (
+                  <li key={player.id} className="text-gray-300">
+                    <span className="font-medium text-white">
+                      {player.firstName} {player.lastName}
+                    </span>{' '}
+                    <span className="text-gray-500">({player.position})</span>{' '}
+                    <span className="text-gray-400">
+                      {awards
+                        .sort((a, b) => b.season - a.season)
+                        .map((a) => awardBadgeText(a))
+                        .join(', ')}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          })()}
+        </>
+      )}
+    </div>
+  )
+}
+
 /**
  * "What happened to my roster" report shown at the top of the resign
  * screen - retirements otherwise just make a player vanish with no
@@ -4139,7 +4305,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
   const [autoFilling, setAutoFilling] = useState(false)
   const [rosterError, setRosterError] = useState<string | null>(null)
   const [tab, setTab] = useState<
-    'league' | 'roster' | 'gamereport' | 'trade' | 'freeagents' | 'teamstats' | 'stats' | 'history'
+    'league' | 'roster' | 'gamereport' | 'trade' | 'freeagents' | 'teamstats' | 'stats' | 'awards' | 'history'
   >('league')
   const [showGuide, setShowGuide] = useState(true)
 
@@ -4415,6 +4581,7 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
             )}
             <NavTab icon="📋" label="Team Stats" active={tab === 'teamstats'} onClick={() => setTab('teamstats')} />
             <NavTab icon="📈" label="Stat Leaders" active={tab === 'stats'} onClick={() => setTab('stats')} />
+            <NavTab icon="🏅" label="Awards" active={tab === 'awards'} onClick={() => setTab('awards')} />
             <NavTab icon="📜" label="History" active={tab === 'history'} onClick={() => setTab('history')} />
           </div>
           <p className="text-xs text-gray-500 mb-6">{TAB_DESCRIPTIONS[tab] ?? ''}</p>
@@ -4447,6 +4614,9 @@ function LeagueHome({ leagueId, onReset }: { leagueId: number; onReset: () => vo
           )}
           {tab === 'stats' && (
             <StatsLeadersView leagueId={leagueId} season={league.season} userTeamId={league.userTeamId} />
+          )}
+          {tab === 'awards' && (
+            <AwardsView leagueId={leagueId} season={league.season} userTeamId={league.userTeamId} />
           )}
           {tab === 'history' && (
             <HistoryView leagueId={leagueId} userTeamId={league.userTeamId} teamName={teamName} />

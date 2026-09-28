@@ -92,7 +92,7 @@ export function aggregateSeasonStats(stats: PlayerGameStats[]): Map<number, Stat
 }
 
 /** A rough "how good was this season" number for every position, higher is better. */
-function productionScore(position: Position, t: StatTotals): number {
+export function productionScore(position: Position, t: StatTotals): number {
   switch (position) {
     case 'QB':
       return t.passYards + t.passTDs * 20 - t.interceptions * 15 + t.rushYards * 0.5

@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type { GameResult, League, Player, PlayerGameStats, ScheduledGame, Team } from '../types'
+import type { SeasonAward } from '../engine/awards'
 
 export class DynastyDB extends Dexie {
   leagues!: EntityTable<League, 'id'>
@@ -8,6 +9,7 @@ export class DynastyDB extends Dexie {
   games!: EntityTable<GameResult, 'id'>
   schedule!: EntityTable<ScheduledGame, 'id'>
   playerGameStats!: EntityTable<PlayerGameStats, 'id'>
+  playerAwards!: EntityTable<SeasonAward, 'id'>
 
   constructor() {
     super('dynasty')
@@ -25,6 +27,11 @@ export class DynastyDB extends Dexie {
       // query), playerId covers "one player's career stats"; week/gameId/
       // teamId are filtered in memory from the season's rows instead.
       playerGameStats: '++id, [leagueId+season], playerId',
+    })
+    this.version(3).stores({
+      // [leagueId+season] covers "this season's award ceremony", playerId
+      // covers "one player's career award history".
+      playerAwards: '++id, [leagueId+season], playerId',
     })
   }
 }
