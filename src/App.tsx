@@ -380,12 +380,15 @@ function InfoTip({ label, tip }: { label: string; tip: string }) {
 }
 
 /** Tiers a rating (overall/potential) into a consistent color so strong vs. weak players are readable at a glance across every table. */
+/** One consistent overall-rating tier scale used everywhere a rating is
+ * shown (Roster, Trade cards, Standings, Free Agency, Draft, etc.) - best
+ * to worst: hot pink, gold, green, white, deep orange. */
 function overallColor(n: number) {
-  if (n >= 90) return 'text-fuchsia-400'
-  if (n >= 80) return 'text-emerald-400'
-  if (n >= 70) return 'text-cyan-400'
-  if (n >= 60) return 'text-gray-300'
-  return 'text-orange-400'
+  if (n >= 90) return 'text-pink-400'
+  if (n >= 80) return 'text-amber-400'
+  if (n >= 70) return 'text-emerald-400'
+  if (n >= 60) return 'text-white'
+  return 'text-orange-600'
 }
 
 /** A position's 3 attribute ratings always keep the same color by slot (1st/2nd/3rd), so e.g. Speed reads as the same color everywhere it appears, not colored by how good this particular player's number happens to be. */
@@ -821,12 +824,12 @@ function RosterView({
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-gray-300">
                       <span>Age {p.age}</span>
                       <span>Exp {!p.experience ? 'R' : p.experience}</span>
-                      <span className={overallColor(p.ratings.overall)}>{p.ratings.overall} OVR</span>
-                      <span className="text-yellow-400">{p.ratings.potential} POT</span>
                       <span className="whitespace-nowrap">{p.contract ? formatMoney(p.contract.salary) : '-'}</span>
                       <span>{p.contract?.yearsLeft ?? '-'}yr left</span>
+                      <span className={overallColor(p.ratings.overall)}>{p.ratings.overall} OVR</span>
+                      <span className="text-yellow-400">{p.ratings.potential} POT</span>
                     </div>
-                    <div className="flex items-end justify-between gap-2 mt-1">
+                    <div className="flex items-end justify-between gap-2 mt-1 pt-1 border-t border-slate-800">
                       <div className="text-gray-400 min-w-0">{seasonStatLine(p.position, statTotals.get(p.id))}</div>
                       <div className="flex gap-2 shrink-0">
                         <span title={attrLabels[0]} className={attrSlotColor(0)}>
@@ -865,13 +868,13 @@ function RosterView({
                   <th className="py-1 pr-6 min-w-[11rem]">Name</th>
                   <th className="py-1 px-2 text-right w-12">Age</th>
                   <th className="py-1 px-2 text-right w-12" title="Seasons played in the league - Rookie means their first year">Exp</th>
-                  <th className="py-1 px-2 text-right w-12">OVR</th>
-                  <th className="py-1 px-2 text-right w-12">POT</th>
-                  <th className="py-1 px-2 text-right w-12" title={attrLabels[0]}>{abbrevLabel(attrLabels[0])}</th>
-                  <th className="py-1 px-2 text-right w-12" title={attrLabels[1]}>{abbrevLabel(attrLabels[1])}</th>
-                  <th className="py-1 px-2 text-right w-12" title={attrLabels[2]}>{abbrevLabel(attrLabels[2])}</th>
                   <th className="py-1 pl-4 pr-2 text-right w-20">Salary</th>
                   <th className="py-1 px-2 text-right w-12" title="Years left on current contract">Yrs Left</th>
+                  <th className="py-1 pl-4 px-2 text-right w-12">OVR</th>
+                  <th className="py-1 px-2 text-right w-12">POT</th>
+                  <th className="py-1 pl-4 px-2 text-right w-12 border-l border-slate-700" title={attrLabels[0]}>{abbrevLabel(attrLabels[0])}</th>
+                  <th className="py-1 px-2 text-right w-12" title={attrLabels[1]}>{abbrevLabel(attrLabels[1])}</th>
+                  <th className="py-1 px-2 text-right w-12" title={attrLabels[2]}>{abbrevLabel(attrLabels[2])}</th>
                   <th className="py-1 pl-6 text-left">Season</th>
                   {editable && <th className="py-1 pl-4 w-16"></th>}
                 </tr>
@@ -933,19 +936,19 @@ function RosterView({
                       <td className="py-1 px-2 text-right text-gray-400">
                         {!p.experience ? 'R' : p.experience}
                       </td>
-                      <td className="py-1 px-2 text-right text-green-400 font-semibold">
+                      <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
+                        {p.contract ? formatMoney(p.contract.salary) : '-'}
+                      </td>
+                      <td className="py-1 px-2 text-right">{p.contract?.yearsLeft ?? '-'}</td>
+                      <td className={`py-1 pl-4 px-2 text-right font-semibold ${overallColor(p.ratings.overall)}`}>
                         {p.ratings.overall}
                         {p.trend === 'up' && <span className="ml-1 text-green-400" title="Playing well lately">▲</span>}
                         {p.trend === 'down' && <span className="ml-1 text-red-400" title="Playing poorly lately">▼</span>}
                       </td>
                       <td className="py-1 px-2 text-right text-yellow-400 font-semibold">{p.ratings.potential}</td>
-                      <td className={`py-1 px-2 text-right ${attrSlotColor(0)}`} title={attrLabels[0]}>{p.ratings.attr1}</td>
+                      <td className={`py-1 pl-4 px-2 text-right border-l border-slate-800 ${attrSlotColor(0)}`} title={attrLabels[0]}>{p.ratings.attr1}</td>
                       <td className={`py-1 px-2 text-right ${attrSlotColor(1)}`} title={attrLabels[1]}>{p.ratings.attr2}</td>
                       <td className={`py-1 px-2 text-right ${attrSlotColor(2)}`} title={attrLabels[2]}>{p.ratings.attr3}</td>
-                      <td className="py-1 pl-4 pr-2 text-right whitespace-nowrap">
-                        {p.contract ? formatMoney(p.contract.salary) : '-'}
-                      </td>
-                      <td className="py-1 px-2 text-right">{p.contract?.yearsLeft ?? '-'}</td>
                       <td className="py-1 pl-6 text-left text-gray-500 whitespace-nowrap">
                         {seasonStatLine(p.position, statTotals.get(p.id))}
                       </td>
